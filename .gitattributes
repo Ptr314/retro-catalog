@@ -1,0 +1,12 @@
+# LF everywhere, on every OS. The server is Linux and reads the systemd unit, the nginx
+# config and shell snippets straight from the checkout; on Windows core.autocrlf would
+# otherwise keep the working copy in CRLF and warn about it on every `git add`.
+* text=auto eol=lf
+
+*.woff2 binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.webp  binary
+*.ico   binary

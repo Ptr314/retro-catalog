@@ -13,6 +13,7 @@
  *     "year": 1988,
  *     "author": "…",
  *     "author_wanted": false,
+ *     "source_url": "https://…",     // shown as «Автор/Источник»; anything but http(s) is dropped
  *     "description": "Markdown",
  *     "published": true
  *   }
@@ -36,6 +37,7 @@ type Row = {
   year?: unknown;
   author?: unknown;
   author_wanted?: unknown;
+  source_url?: unknown;
   description?: unknown;
   published?: unknown;
 };
@@ -122,6 +124,7 @@ for (const row of rows) {
     year: Number(row.year) || null,
     author: str(row.author),
     author_wanted: flag(row.author_wanted, 0),
+    source_url: /^https?:\/\//i.test(str(row.source_url)) ? str(row.source_url).slice(0, 500) : '',
     description: str(row.description),
     published: flag(row.published, 1),
   };

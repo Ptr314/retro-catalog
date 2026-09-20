@@ -250,6 +250,38 @@ export function slugify(value: string): string {
     .slice(0, 80);
 }
 
+/**
+ * An uploaded file's own name, made safe for a path and a URL — and otherwise left alone.
+ * Unlike slugify() it keeps case and every dot: emulators pick a loader by the full
+ * extension chain, so "UKNC-timeCS.ext.zip" must not become "uknc-timecs-ext.zip".
+ * Cyrillic is transliterated, anything else outside [A-Za-z0-9._-] becomes a dash.
+ */
+export function safeFileName(original: string, maxLength = 100): string {
+  const base = original.replaceAll('\\', '/').split('/').pop() ?? '';
+  let name = Array.from(base.normalize('NFC'))
+    .map((ch) => {
+      const lower = ch.toLowerCase();
+      const latin = TRANSLIT[lower];
+      if (latin === undefined) return ch;
+      // keep the case of the original letter: "Клад" -> "Klad"
+      return ch === lower ? latin : latin.charAt(0).toUpperCase() + latin.slice(1);
+    })
+    .join('')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/-*\.-*/g, '.') // "Image (v2).tar.gz" -> "Image-v2.tar.gz", not "Image-v2-.tar.gz"
+    .replace(/\.{2,}/g, '.') // ".." is what isSafeName() refuses
+    .replace(/^[.-]+|[.-]+$/g, '');
+
+  if (name.length > maxLength) {
+    // Shorten the stem, never the extensions.
+    const dot = name.indexOf('.');
+    const extensions = dot > 0 && name.length - dot <= 30 ? name.slice(dot) : '';
+    name = name.slice(0, maxLength - extensions.length).replace(/[.-]+$/, '') + extensions;
+  }
+  return name || 'file';
+}
+
 export function formatBytes(bytes: number | null): string {
   if (!bytes || bytes <= 0) return '';
   const units = ['Б', 'КБ', 'МБ', 'ГБ'];

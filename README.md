@@ -124,7 +124,7 @@ npm run import -- catalog.json
 
 ## Деплой
 
-Пошаговая инструкция — в [DEPLOY.md](DEPLOY.md): Ubuntu 24.04, Node 24, Caddy, код из git, обновление и бэкап.
+Пошаговая инструкция — в [DEPLOY.md](DEPLOY.md): Ubuntu 24.04, Node 24, nginx + certbot (или Caddy на чистом сервере), код из git, обновление и бэкап.
 Коротко: нужен HTTPS-домен (эмулятор скачивает файлы сам, по `http://` браузер это заблокирует),
 а всё состояние сайта — это `data/catalog.db`, `data/files` и `data/screenshots`.
 

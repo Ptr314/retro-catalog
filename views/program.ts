@@ -5,6 +5,18 @@ import { markdownExcerpt } from '../markdown.ts';
 import { layout } from './layout.ts';
 import { imageTag, mdBlock, wantedBadge } from './parts.ts';
 
+/**
+ * «Автор/Источник»: the link without its scheme, shortened. The scheme is re-checked
+ * here as well — the save handler validates it, but rows can also arrive through the
+ * import tool, and this value goes straight into an href.
+ */
+function sourceLink(url: string): string {
+  if (!/^https?:\/\//i.test(url)) return '';
+  const shown = url.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+  const label = shown.length > 48 ? `${shown.slice(0, 47)}…` : shown;
+  return `<a href="${escapeHtml(url)}" target="_blank" rel="nofollow noopener">${escapeHtml(label)}</a>`;
+}
+
 export function programPage(
   p: ProgramRow,
   family: Family | null,
@@ -26,6 +38,7 @@ export function programPage(
     ['Категория', escapeHtml(p.category_name ?? '')],
     ['Год', p.year ? String(p.year) : ''],
     ['Автор', p.author_wanted ? wantedBadge('разыскивается', p.family_wanted_note) : escapeHtml(p.author)],
+    ['Автор/Источник', sourceLink(p.source_url ?? '')],
     ['Размер', escapeHtml(formatBytes(p.file_size))],
   ].filter((row) => row[1] !== '') as [string, string][];
 

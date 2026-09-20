@@ -204,6 +204,9 @@ export function editPage(user: User, p: ProgramRow | null, data: EditData, error
         <label>Автор<input type="text" name="author" value="${v(p?.author)}" maxlength="120"></label>
       </div>
       <label class="check"><input type="checkbox" name="author_wanted" value="1"${p?.author_wanted ? ' checked' : ''}> Разыскивается автор</label>
+      <label>URL (автор/источник)
+        <input type="url" name="source_url" value="${v(p?.source_url)}" maxlength="500" placeholder="https://…">
+      </label>
       ${mdEditor('description', 'Описание', p?.description ?? '')}
       <label class="check"><input type="checkbox" name="published" value="1"${!p || p.published ? ' checked' : ''}> Показывать в каталоге</label>
       ${modelGroups

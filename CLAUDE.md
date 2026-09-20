@@ -60,9 +60,11 @@ Flat module layout, each file one concern; `views/` renders, everything else is 
 
 | Where | Name | Holds |
 |---|---|---|
-| `data/files` | `{programId}-{stem}{ext}` | the main download |
-| `data/files` | `{programId}-e{emulatorId}-{stem}{ext}` | the per-emulator file |
+| `data/files` | `{programId}-{original name}` | the main download |
+| `data/files` | `{programId}-e{emulatorId}-{original name}` | the per-emulator file |
 | `data/screenshots` | `p{id}-`, `f{id}-`, `m{id}-` + random + ext | program screenshots, family and model pictures |
+
+**The uploaded file's own name is kept** (`http.ts#safeFileName`), not slugified: case and every dot survive, only characters unsafe in a path or URL change. Emulators choose a loader by the full extension chain, so `UKNC-timeCS.ext.zip` turning into `uknc-timecs-ext.zip` — what `slugify()` did — broke launching. `slugify()` is for URL slugs only. Because names are now case-sensitive, replacing a file goes through `replaceStoredFile()`: on a case-insensitive disk "A.zip" after "a.zip" is the same file, and unlinking "the old one" after the write would delete the new one. `/dl/` strips the `{id}-` prefix, so a visitor saves the file under its original name.
 
 The directory name `screenshots` is now slightly inaccurate — it holds every image — but `/screenshots/` is wired into `deploy/nginx.conf` and the backup instructions, so the prefixes carry the distinction instead. **SQLite never deletes files**: any handler that removes a row owning a file must `unlink` it first, as the program, emulator and family delete handlers do.
 
@@ -85,5 +87,6 @@ Fonts are self-hosted in `public/` (`handjet-*.woff2`, `golos-*.woff2`, both SIL
 - Admin save (`POST /admin/save`) answers JSON when `Accept: application/json`, HTML otherwise — `admin.js` uses the JSON path, a JS-less browser gets the form path. Keep both working.
 - Public URLs: `/` (families), `/catalog`, `/<family>`, `/<family>/<model>`, `/p/<slug>`, `/dl/<slug>`, `/run/<slug>/<emulatorId>`. The family and model pages are the catalog with a fixed filter, so all four share `catalogBody()`.
 - "Author wanted" is a per-program flag; *what to do about it* is per-family text (`families.wanted_note`, Markdown). `parts.ts#wantedBadge()` is the single renderer for the tile, the table row and the program page: with a note it underlines the label, appends the "i" mark and reveals the rendered note on hover or keyboard focus, CSS only; with an empty note it degrades to the plain lamp. Its wrappers are `<div>`s on purpose — the note renders to `<p>`/`<ul>`, and a block element under a `<p>` ancestor makes the HTML parser close that ancestor early, so never put the badge back inside a `<p>`.
+- `programs.source_url` is shown on the program page as «Автор/Источник». A user-supplied URL that lands in an `href` is checked twice on purpose: `httpUrl()` in the save handler refuses anything but http(s) with a message, and `program.ts#sourceLink()` re-checks the scheme before rendering, because rows can also arrive through `tools/import.ts`. `escapeHtml()` alone does not stop `javascript:` — follow the same pattern for any new link field.
 - A program always belongs to exactly one family (`ON DELETE RESTRICT`) and to any number of models of *that* family — `/admin/save` drops model ids from other families rather than trusting the form.
 - Deployment targets systemd (`deploy/retro-catalog.service`, hardened with `ProtectSystem=strict` + `ReadWritePaths=…/data`) behind Caddy or nginx (`deploy/`). The step-by-step procedure lives in `DEPLOY.md`, not the README — keep the two from drifting: the README only points there.

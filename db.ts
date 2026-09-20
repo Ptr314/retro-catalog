@@ -65,6 +65,8 @@ export type Program = {
   author: string;
   /** 1 = "Разыскивается автор". */
   author_wanted: number;
+  /** http(s) link shown as «Автор/Источник», or empty. */
+  source_url: string;
   /** Markdown source. */
   description: string;
   /** File name inside data/screenshots, or empty. */
@@ -259,6 +261,9 @@ const migrations: string[] = [
 
   // Per-family note shown next to "author wanted" programs: whom to write to, what is known.
   `ALTER TABLE families ADD COLUMN wanted_note TEXT NOT NULL DEFAULT '';`,
+
+  // Where the program came from: the author's page or the archive it was taken from.
+  `ALTER TABLE programs ADD COLUMN source_url TEXT NOT NULL DEFAULT '';`,
 ];
 
 /** Runs fn inside BEGIN/COMMIT, rolling back on any throw. Must not be nested. */
@@ -508,11 +513,12 @@ export function createProgram(p: ProgramInput, modelIds: number[]): number {
     const result = db
       .prepare(
         `INSERT INTO programs
-           (slug, title, family_id, category_id, year, author, author_wanted, description, published, created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+           (slug, title, family_id, category_id, year, author, author_wanted, source_url,
+            description, published, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
-        p.slug, p.title, p.family_id, p.category_id, p.year, p.author, p.author_wanted,
+        p.slug, p.title, p.family_id, p.category_id, p.year, p.author, p.author_wanted, p.source_url,
         p.description, p.published, ts, ts,
       );
     const id = Number(result.lastInsertRowid);
@@ -527,11 +533,11 @@ export function updateProgram(id: number, p: ProgramInput, modelIds: number[]): 
     db.prepare(
       `UPDATE programs SET
          slug = ?, title = ?, family_id = ?, category_id = ?, year = ?, author = ?,
-         author_wanted = ?, description = ?, published = ?, updated_at = ?
+         author_wanted = ?, source_url = ?, description = ?, published = ?, updated_at = ?
        WHERE id = ?`,
     ).run(
       p.slug, p.title, p.family_id, p.category_id, p.year, p.author,
-      p.author_wanted, p.description, p.published, now(), id,
+      p.author_wanted, p.source_url, p.description, p.published, now(), id,
     );
     writeProgramModels(id, modelIds);
     writeSearchText(id);

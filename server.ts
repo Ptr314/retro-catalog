@@ -6,13 +6,13 @@ import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { unlink, writeFile } from 'node:fs/promises';
-import { basename, extname, join } from 'node:path';
+import { join } from 'node:path';
 import { config, filesDir, rootDir, screenshotsDir } from './config.ts';
 import * as db from './db.ts';
 import type { ProgramInput, ProgramRow, RefTable, User } from './db.ts';
 import {
   BodyTooLarge, clientIp, detectImage, formatBytes, html, isSafeName,
-  cookies, json, readBody, readForm, redirect, sendFile, setCookie, slugify, text,
+  cookies, json, readBody, readForm, redirect, safeFileName, sendFile, setCookie, slugify, text,
 } from './http.ts';
 import {
   authenticate, currentUser, endSession, hashPassword, loginBlockedFor, noteLoginFailure,
@@ -102,7 +102,7 @@ route('GET', '/dl/:slug', async (ctx) => {
   if (!program.file_name) return notFound(ctx);
   db.bumpDownloads(program.id);
   await sendFile(ctx.req, ctx.res, join(filesDir, program.file_name), {
-    downloadAs: program.file_name,
+    downloadAs: downloadName(program.file_name),
     contentType: 'application/octet-stream',
     cors: true,
     cacheSeconds: 86400,
@@ -215,6 +215,10 @@ route('POST', '/admin/save', async (ctx) => {
 
   if (!title) return fail('Название обязательно.');
 
+  // Ends up in an href on a public page, so only real web addresses get through.
+  const sourceUrl = httpUrl(form.get('source_url'));
+  if (sourceUrl === null) return fail('Ссылка «Автор/Источник» должна начинаться с http:// или https://.');
+
   const familyId = Number(form.get('family_id')) || 0;
   if (!familyId || !db.getRef('families', familyId)) return fail('Выберите семейство.');
 
@@ -234,6 +238,7 @@ route('POST', '/admin/save', async (ctx) => {
     year: Number(form.get('year')) || null,
     author: (form.get('author') ?? '').trim().slice(0, 120),
     author_wanted: form.get('author_wanted') ? 1 : 0,
+    source_url: sourceUrl,
     description: (form.get('description') ?? '').trim().slice(0, 20000),
     published: form.get('published') ? 1 : 0,
   };
@@ -284,10 +289,7 @@ route('PUT', '/admin/upload/program/:id/emu/:emu', async (ctx) => {
   if (body.length === 0) return json(ctx.res, 400, { error: 'Пустой файл' });
 
   const previous = db.getEmulatorFile(id, emulatorId);
-  await writeFile(join(filesDir, name), body);
-  if (previous && previous.file_name !== name) {
-    await unlink(join(filesDir, previous.file_name)).catch(() => {});
-  }
+  await replaceStoredFile(previous?.file_name ?? '', name, body);
   db.setEmulatorFile(id, emulatorId, name, body.length);
   json(ctx.res, 200, {
     name,
@@ -328,10 +330,7 @@ route('PUT', '/admin/upload/:entity/:id/:kind', async (ctx) => {
     const name = storedFileName(`${id}`, original);
     const body = await readBody(ctx.req, config.maxFileBytes);
     if (body.length === 0) return json(ctx.res, 400, { error: 'Пустой файл' });
-    await writeFile(join(filesDir, name), body);
-    if (program.file_name && program.file_name !== name) {
-      await unlink(join(filesDir, program.file_name)).catch(() => {});
-    }
+    await replaceStoredFile(program.file_name, name, body);
     db.setFile(id, name, body.length);
     return json(ctx.res, 200, {
       name,
@@ -688,6 +687,21 @@ async function saveImage(ctx: Ctx, prefix: string, previous: string): Promise<st
   return name;
 }
 
+/**
+ * A link typed into a form: '' when left empty, the normalised URL when it is a real
+ * http(s) address, null when it is anything else (javascript:, data:, plain text).
+ */
+function httpUrl(value: string | null): string | null {
+  const raw = (value ?? '').trim().slice(0, 500);
+  if (!raw) return '';
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The emulator downloads the package itself, so the template gets an absolute URL. */
 function emulatorLaunchUrl(template: string, fileUrl: string): string {
   return template.replaceAll('{url}', encodeURIComponent(fileUrl));
@@ -701,12 +715,31 @@ function uniqueSlug(candidate: string, exceptId: number): string {
   return slug;
 }
 
+/**
+ * "{prefix}-{the file's own name}". The prefix (program id, emulator slot) makes the name
+ * unique; the rest is kept as uploaded, because emulators choose a loader by the full
+ * extension chain and people recognise a download by its name.
+ */
 function storedFileName(prefix: string, original: string): string {
-  const base = basename(original.replaceAll('\\', '/'));
-  const ext = (extname(base).toLowerCase().match(/^\.[a-z0-9]{1,10}$/) ?? [''])[0];
-  const stem = slugify(base.slice(0, base.length - extname(base).length)).slice(0, 60) || 'file';
-  const name = `${prefix}-${stem}${ext}`;
-  return isSafeName(name) ? name : `${prefix}-file${ext}`;
+  const name = `${prefix}-${safeFileName(original)}`;
+  return isSafeName(name) ? name : `${prefix}-file`;
+}
+
+/**
+ * Writes the new file and removes the one it replaces. Names keep their case, so on a
+ * case-insensitive disk (Windows, macOS) "A.zip" after "a.zip" is the same file:
+ * unlinking "the old one" after the write would delete what was just written.
+ */
+async function replaceStoredFile(previous: string, name: string, body: Buffer): Promise<void> {
+  const sameOnDisk = previous.toLowerCase() === name.toLowerCase();
+  if (previous && sameOnDisk && previous !== name) await unlink(join(filesDir, previous)).catch(() => {});
+  await writeFile(join(filesDir, name), body);
+  if (previous && !sameOnDisk) await unlink(join(filesDir, previous)).catch(() => {});
+}
+
+/** The name a visitor saves the file under: the stored one minus our "{id}-" prefix. */
+function downloadName(stored: string): string {
+  return stored.replace(/^\d+-/, '') || stored;
 }
 
 function notFound(ctx: Ctx): void {
