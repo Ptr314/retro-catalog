@@ -100,7 +100,8 @@ route('GET', '/dl/:slug', async (ctx) => {
   const program = db.getProgramBySlug(ctx.params.slug);
   if (!program || (!program.published && !ctx.user)) return notFound(ctx);
   if (!program.file_name) return notFound(ctx);
-  db.bumpDownloads(program.id);
+  // An administrator checking their own upload is not an audience.
+  if (!ctx.user) db.bumpDownloads(program.id);
   await sendFile(ctx.req, ctx.res, join(filesDir, program.file_name), {
     downloadAs: downloadName(program.file_name),
     contentType: 'application/octet-stream',
@@ -114,7 +115,7 @@ route('GET', '/run/:slug/:emu', (ctx) => {
   if (!program || (!program.published && !ctx.user)) return notFound(ctx);
   const slot = db.getEmulatorFile(program.id, Number(ctx.params.emu));
   if (!slot) return notFound(ctx);
-  db.bumpRuns(program.id, slot.emulator_id);
+  if (!ctx.user) db.bumpRuns(program.id, slot.emulator_id);
   // 302, never 301: a cached permanent redirect would freeze the counter.
   redirect(ctx.res, emulatorLaunchUrl(slot.url_template, `${config.siteUrl}/files/${slot.file_name}`), 302);
 });
