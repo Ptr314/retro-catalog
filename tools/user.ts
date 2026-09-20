@@ -1,30 +1,67 @@
 /**
  * Admin accounts.
- *   node --disable-warning=ExperimentalWarning tools/user.ts add <login>
+ *   node --disable-warning=ExperimentalWarning tools/user.ts add <login> [имя]
  *   node --disable-warning=ExperimentalWarning tools/user.ts passwd <login>
  *   node --disable-warning=ExperimentalWarning tools/user.ts list
  *
- * The password is asked interactively (not echoed) or taken from $PASSWORD.
+ * The password is asked interactively (not echoed), read from a pipe (two lines:
+ * password, then the same again) or taken from $PASSWORD.
  */
-import { createInterface } from 'node:readline';
 import { hashPassword } from '../auth.ts';
 import { countUsers, createUser, getUserByName, listUsers, setPasswordHash } from '../db.ts';
 
+/** Piped input (scripts): every prompt takes the next line. Read once, hand out in order. */
+let pipedLines: Promise<string[]> | null = null;
+function nextPipedLine(): Promise<string> {
+  pipedLines ??= new Promise((resolve) => {
+    let all = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk: string) => (all += chunk));
+    process.stdin.on('end', () => resolve(all.split(/\r?\n/)));
+  });
+  return pipedLines.then((lines) => lines.shift() ?? '');
+}
+
+/**
+ * Asks for a password without echoing it. Raw mode, not readline: readline in terminal
+ * mode redraws the line on question() and wipes a prompt written before it — the tool
+ * then looked frozen — and silencing its echo means patching a private field.
+ */
 function askPassword(prompt: string): Promise<string> {
   if (process.env.PASSWORD) return Promise.resolve(process.env.PASSWORD);
-  const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+  const stdin = process.stdin;
+  process.stdout.write(prompt);
+  if (!stdin.isTTY) return nextPipedLine();
+
   return new Promise((resolve) => {
-    process.stdout.write(prompt);
-    // readline echoes every keystroke through _writeToOutput; silence it while the password is typed.
-    const muted = rl as unknown as { _writeToOutput: (s: string) => void };
-    const original = muted._writeToOutput;
-    muted._writeToOutput = () => {};
-    rl.question('', (answer) => {
-      muted._writeToOutput = original;
+    let value = '';
+    const finish = (): void => {
+      stdin.off('data', onData);
+      stdin.setRawMode(false);
+      stdin.pause();
       process.stdout.write('\n');
-      rl.close();
-      resolve(answer);
-    });
+    };
+    const onData = (chunk: string): void => {
+      if (chunk.startsWith('\u001b')) return; // arrows and other escape sequences
+      for (const ch of chunk) {
+        if (ch === '\r' || ch === '\n') {
+          finish();
+          resolve(value);
+          return;
+        }
+        if (ch === '\u0003') {
+          // Ctrl+C: raw mode swallows the signal, so honour it by hand
+          finish();
+          process.exit(130);
+        }
+        if (ch === '\u007f' || ch === '\b') value = Array.from(value).slice(0, -1).join('');
+        else if (ch >= ' ') value += ch;
+      }
+    };
+    stdin.setRawMode(true);
+    stdin.setEncoding('utf8');
+    stdin.resume();
+    stdin.on('data', onData);
   });
 }
 

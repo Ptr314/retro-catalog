@@ -4,7 +4,7 @@ catalog.emuverse.ru {
 
 	# Program files and screenshots are served straight from disk, bypassing Node.
 	handle_path /files/* {
-		root * /opt/retro-catalog/data/files
+		root * /var/www/catalog/data/files
 		header Access-Control-Allow-Origin "*"
 		header X-Content-Type-Options "nosniff"
 		file_server

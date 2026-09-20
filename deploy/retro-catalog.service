@@ -6,8 +6,8 @@ After=network.target
 Type=simple
 User=retro
 Group=retro
-WorkingDirectory=/opt/retro-catalog
-ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning /opt/retro-catalog/server.ts
+WorkingDirectory=/var/www/catalog
+ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning /var/www/catalog/server.ts
 Restart=always
 RestartSec=3
 Environment=NODE_ENV=production
@@ -18,7 +18,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/retro-catalog/data
+ReadWritePaths=/var/www/catalog/data
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
