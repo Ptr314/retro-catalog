@@ -7,8 +7,8 @@ export type LayoutOptions = {
   /** Rendered in the header's right side. */
   nav?: string;
   bodyClass?: string;
-  /** Pull in the small admin script (uploads, delete confirmation). */
-  adminScript?: boolean;
+  /** Scripts from /static to pull in, e.g. ['admin.js']. */
+  scripts?: string[];
 };
 
 export function layout(opts: LayoutOptions, body: string): string {
@@ -41,7 +41,7 @@ ${body}
   <span>${escapeHtml(config.siteName)}</span>
   <a href="/admin">админка</a>
 </footer>
-${opts.adminScript ? '<script src="/static/admin.js" defer></script>' : ''}
+${(opts.scripts ?? []).map((name) => `<script src="/static/${escapeHtml(name)}" defer></script>`).join('\n')}
 </body>
 </html>`;
 }

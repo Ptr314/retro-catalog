@@ -9,7 +9,7 @@ import { unlink, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { config, filesDir, rootDir, screenshotsDir } from './config.ts';
 import * as db from './db.ts';
-import type { Program, ProgramInput, User } from './db.ts';
+import type { ProgramInput, ProgramRow, RefTable, User } from './db.ts';
 import {
   BodyTooLarge, clientIp, detectImage, formatBytes, html, isSafeName,
   json, readBody, readForm, redirect, sendFile, slugify, text,
@@ -18,10 +18,13 @@ import {
   authenticate, currentUser, endSession, hashPassword, loginBlockedFor, noteLoginFailure,
   noteLoginSuccess, sameOrigin, startSession, verifyPassword,
 } from './auth.ts';
+import { refSpec } from './refs.ts';
 import { errorPage } from './views/layout.ts';
 import { listPage, programPage } from './views/catalog.ts';
 import type { ListQuery } from './views/catalog.ts';
 import { adminListPage, editPage, loginPage, passwordPage } from './views/admin.ts';
+import { refEditPage, refListPage } from './views/admin-refs.ts';
+import { userEditPage, userListPage } from './views/admin-users.ts';
 
 const publicDir = join(rootDir, 'public');
 
@@ -40,8 +43,9 @@ const routes: Route[] = [];
 
 function route(method: string, path: string, handler: Handler, auth = false): void {
   const keys: string[] = [];
+  // Escape regex specials (dots in /favicon.ico) before turning :params into groups.
   const pattern = new RegExp(
-    `^${path.replace(/:[A-Za-z]+/g, (m) => {
+    `^${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/:[A-Za-z_]+/g, (m) => {
       keys.push(m.slice(1));
       return '([^/]+)';
     })}$`,
@@ -55,47 +59,40 @@ route('GET', '/', (ctx) => {
   const p = ctx.url.searchParams;
   const query: ListQuery = {
     q: (p.get('q') ?? '').trim().slice(0, 100),
-    platform: (p.get('platform') ?? '').slice(0, 60),
-    category: (p.get('category') ?? '').slice(0, 60),
-    year: p.get('year') ? Number(p.get('year')) || null : null,
+    familyId: Number(p.get('family')) || null,
+    modelId: Number(p.get('model')) || null,
+    categoryId: Number(p.get('category')) || null,
+    year: Number(p.get('year')) || null,
     sort: p.get('sort') ?? 'new',
   };
   const page = Number(p.get('page')) || 1;
   const result = db.listPrograms({ ...query, page, perPage: 24 });
-  html(ctx.res, 200, listPage(result.rows, result.total, result.page, result.pages, query, db.facets()));
+  html(
+    ctx.res,
+    200,
+    listPage(result.rows, result.total, result.page, result.pages, query, db.facets(query.familyId), db.listFamilies()),
+  );
 });
 
 route('GET', '/p/:slug', (ctx) => {
   const program = db.getProgramBySlug(ctx.params.slug);
   if (!program || (!program.published && !ctx.user)) return notFound(ctx);
-  html(ctx.res, 200, programPage(program, {
-    download: downloadTarget(program) ? `/dl/${program.slug}` : '',
-    run: runTarget(program) ? `/run/${program.slug}` : '',
+  html(ctx.res, 200, programPage(program, db.modelsForProgram(program.id), {
+    download: program.file_name ? `/dl/${program.slug}` : '',
   }));
 });
 
 route('GET', '/dl/:slug', async (ctx) => {
   const program = db.getProgramBySlug(ctx.params.slug);
   if (!program || (!program.published && !ctx.user)) return notFound(ctx);
-  const target = downloadTarget(program);
-  if (!target) return notFound(ctx);
+  if (!program.file_name) return notFound(ctx);
   db.bumpDownloads(program.id);
-  if (target.kind === 'external') return redirect(ctx.res, target.url, 302);
-  await sendFile(ctx.req, ctx.res, join(filesDir, target.name), {
-    downloadAs: target.name,
+  await sendFile(ctx.req, ctx.res, join(filesDir, program.file_name), {
+    downloadAs: program.file_name,
     contentType: 'application/octet-stream',
     cors: true,
     cacheSeconds: 86400,
   });
-});
-
-route('GET', '/run/:slug', (ctx) => {
-  const program = db.getProgramBySlug(ctx.params.slug);
-  if (!program || (!program.published && !ctx.user)) return notFound(ctx);
-  const target = runTarget(program);
-  if (!target) return notFound(ctx);
-  db.bumpRuns(program.id);
-  redirect(ctx.res, target, 302);
 });
 
 route('GET', '/static/:name', async (ctx) => {
@@ -129,6 +126,9 @@ route('OPTIONS', '/files/:name', (ctx) => {
 });
 
 route('GET', '/health', (ctx) => text(ctx.res, 200, 'ok'));
+
+// Explicit, because /:family (registered last) would otherwise swallow it.
+route('GET', '/favicon.ico', (ctx) => redirect(ctx.res, '/static/favicon.svg', 301));
 
 // ------------------------------------------------------------------ admin
 
@@ -169,12 +169,12 @@ route('GET', '/admin', (ctx) => {
   html(ctx.res, 200, adminListPage(ctx.user!, result.rows, result.total, result.page, result.pages, q, db.stats()));
 }, true);
 
-route('GET', '/admin/new', (ctx) => html(ctx.res, 200, editPage(ctx.user!, null)), true);
+route('GET', '/admin/new', (ctx) => html(ctx.res, 200, editPage(ctx.user!, null, editData(null))), true);
 
 route('GET', '/admin/edit/:id', (ctx) => {
   const program = db.getProgramById(Number(ctx.params.id));
   if (!program) return notFound(ctx);
-  html(ctx.res, 200, editPage(ctx.user!, program));
+  html(ctx.res, 200, editPage(ctx.user!, program, editData(program)));
 }, true);
 
 route('POST', '/admin/save', async (ctx) => {
@@ -182,83 +182,47 @@ route('POST', '/admin/save', async (ctx) => {
   const id = Number(form.get('id')) || 0;
   const title = (form.get('title') ?? '').trim();
   const wantsJson = (ctx.req.headers.accept ?? '').includes('application/json');
+  const existing = id ? db.getProgramById(id) : null;
 
-  if (!title) {
-    if (wantsJson) return json(ctx.res, 400, { error: 'Название обязательно' });
-    return html(ctx.res, 400, editPage(ctx.user!, id ? db.getProgramById(id) : null, 'Название обязательно.'));
-  }
+  const fail = (message: string): void => {
+    if (wantsJson) return json(ctx.res, 400, { error: message });
+    html(ctx.res, 400, editPage(ctx.user!, existing, editData(existing), message));
+  };
+
+  if (!title) return fail('Название обязательно.');
+
+  const familyId = Number(form.get('family_id')) || 0;
+  if (!familyId || !db.getRef('families', familyId)) return fail('Выберите семейство.');
+
+  const categoryId = Number(form.get('category_id')) || 0;
+  // Only models of the chosen family may be attached.
+  const familyModels = new Set(db.listModels(familyId).map((m) => m.id));
+  const modelIds = form
+    .getAll('models')
+    .map((value) => Number(value))
+    .filter((modelId) => familyModels.has(modelId));
 
   const input: ProgramInput = {
     slug: uniqueSlug((form.get('slug') ?? '').trim() || slugify(title) || `program-${Date.now()}`, id),
     title: title.slice(0, 200),
-    platform: (form.get('platform') ?? '').trim().slice(0, 60),
-    category: (form.get('category') ?? '').trim().slice(0, 60),
+    family_id: familyId,
+    category_id: categoryId && db.getRef('categories', categoryId) ? categoryId : null,
     year: Number(form.get('year')) || null,
     author: (form.get('author') ?? '').trim().slice(0, 120),
-    publisher: (form.get('publisher') ?? '').trim().slice(0, 120),
+    author_wanted: form.get('author_wanted') ? 1 : 0,
     description: (form.get('description') ?? '').trim().slice(0, 20000),
-    tags: (form.get('tags') ?? '').trim().slice(0, 200),
-    download_url: safeUrl(form.get('download_url')),
-    run_enabled: form.get('run_enabled') ? 1 : 0,
-    run_url: safeUrl(form.get('run_url')),
-    run_params: (form.get('run_params') ?? '').trim().slice(0, 300),
     published: form.get('published') ? 1 : 0,
   };
 
   let savedId = id;
-  if (id && db.getProgramById(id)) {
-    db.updateProgram(id, input);
+  if (existing) {
+    db.updateProgram(id, input, modelIds);
   } else {
-    savedId = db.createProgram(input);
+    savedId = db.createProgram(input, modelIds);
   }
 
   if (wantsJson) return json(ctx.res, 200, { id: savedId, slug: input.slug });
   redirect(ctx.res, `/admin/edit/${savedId}`);
-}, true);
-
-route('PUT', '/admin/upload/:id/screenshot', async (ctx) => {
-  const program = db.getProgramById(Number(ctx.params.id));
-  if (!program) return json(ctx.res, 404, { error: 'Не найдено' });
-
-  const body = await readBody(ctx.req, config.maxScreenshotBytes);
-  const kind = detectImage(body);
-  if (!kind) return json(ctx.res, 400, { error: 'Это не PNG, JPEG, GIF или WebP' });
-
-  const name = `${program.id}-${randomBytes(4).toString('hex')}${kind.ext}`;
-  await writeFile(join(screenshotsDir, name), body);
-  if (program.screenshot) await unlink(join(screenshotsDir, program.screenshot)).catch(() => {});
-  db.setScreenshot(program.id, name);
-  json(ctx.res, 200, { screenshot: name, url: `/screenshots/${name}` });
-}, true);
-
-route('PUT', '/admin/upload/:id/file', async (ctx) => {
-  const program = db.getProgramById(Number(ctx.params.id));
-  if (!program) return json(ctx.res, 404, { error: 'Не найдено' });
-
-  const original = ctx.url.searchParams.get('name') ?? 'file.bin';
-  const name = storedFileName(program.id, original);
-  const body = await readBody(ctx.req, config.maxFileBytes);
-  if (body.length === 0) return json(ctx.res, 400, { error: 'Пустой файл' });
-
-  await writeFile(join(filesDir, name), body);
-  if (program.file_name && program.file_name !== name) {
-    await unlink(join(filesDir, program.file_name)).catch(() => {});
-  }
-  db.setFile(program.id, name, body.length);
-  json(ctx.res, 200, { file: name, size: body.length, human: formatBytes(body.length) });
-}, true);
-
-route('POST', '/admin/clear/:id/:what', async (ctx) => {
-  const program = db.getProgramById(Number(ctx.params.id));
-  if (!program) return json(ctx.res, 404, { error: 'Не найдено' });
-  if (ctx.params.what === 'screenshot' && program.screenshot) {
-    await unlink(join(screenshotsDir, program.screenshot)).catch(() => {});
-    db.setScreenshot(program.id, '');
-  } else if (ctx.params.what === 'file' && program.file_name) {
-    await unlink(join(filesDir, program.file_name)).catch(() => {});
-    db.setFile(program.id, '', null);
-  }
-  json(ctx.res, 200, { ok: true });
 }, true);
 
 route('POST', '/admin/delete/:id', async (ctx) => {
@@ -266,8 +230,237 @@ route('POST', '/admin/delete/:id', async (ctx) => {
   if (!program) return notFound(ctx);
   if (program.screenshot) await unlink(join(screenshotsDir, program.screenshot)).catch(() => {});
   if (program.file_name) await unlink(join(filesDir, program.file_name)).catch(() => {});
+  // SQLite drops the rows; the files behind them are ours to remove.
+  for (const name of db.programFileNames(program.id)) {
+    await unlink(join(filesDir, name)).catch(() => {});
+  }
   db.deleteProgram(program.id);
   redirect(ctx.res, '/admin');
+}, true);
+
+// ------------------------------------------------------------ admin: uploads
+
+/** entity/kind pairs the uploader accepts. The body is the raw file. */
+route('PUT', '/admin/upload/:entity/:id/:kind', async (ctx) => {
+  const { entity, kind } = ctx.params;
+  const id = Number(ctx.params.id);
+
+  if (entity === 'program' && kind === 'screenshot') {
+    const program = db.getProgramById(id);
+    if (!program) return json(ctx.res, 404, { error: 'Не найдено' });
+    const saved = await saveImage(ctx, `p${id}`, program.screenshot);
+    if (!saved) return;
+    db.setScreenshot(id, saved);
+    return json(ctx.res, 200, { name: saved, url: `/screenshots/${saved}` });
+  }
+
+  if (entity === 'program' && kind === 'file') {
+    const program = db.getProgramById(id);
+    if (!program) return json(ctx.res, 404, { error: 'Не найдено' });
+    const original = ctx.url.searchParams.get('name') ?? 'file.bin';
+    const name = storedFileName(`${id}`, original);
+    const body = await readBody(ctx.req, config.maxFileBytes);
+    if (body.length === 0) return json(ctx.res, 400, { error: 'Пустой файл' });
+    await writeFile(join(filesDir, name), body);
+    if (program.file_name && program.file_name !== name) {
+      await unlink(join(filesDir, program.file_name)).catch(() => {});
+    }
+    db.setFile(id, name, body.length);
+    return json(ctx.res, 200, {
+      name,
+      size: body.length,
+      human: formatBytes(body.length),
+      url: `${config.siteUrl}/files/${name}`,
+    });
+  }
+
+  if ((entity === 'family' || entity === 'model') && kind === 'image') {
+    const table: 'families' | 'models' = entity === 'family' ? 'families' : 'models';
+    const row = db.getRef(table, id);
+    if (!row) return json(ctx.res, 404, { error: 'Не найдено' });
+    const saved = await saveImage(ctx, `${entity === 'family' ? 'f' : 'm'}${id}`, String(row.image ?? ''));
+    if (!saved) return;
+    db.setImage(table, id, saved);
+    return json(ctx.res, 200, { name: saved, url: `/screenshots/${saved}` });
+  }
+
+  json(ctx.res, 404, { error: 'Неизвестный вид загрузки' });
+}, true);
+
+route('POST', '/admin/clear/:entity/:id/:kind', async (ctx) => {
+  const { entity, kind } = ctx.params;
+  const id = Number(ctx.params.id);
+
+  if (entity === 'program') {
+    const program = db.getProgramById(id);
+    if (!program) return json(ctx.res, 404, { error: 'Не найдено' });
+    if (kind === 'screenshot' && program.screenshot) {
+      await unlink(join(screenshotsDir, program.screenshot)).catch(() => {});
+      db.setScreenshot(id, '');
+    } else if (kind === 'file' && program.file_name) {
+      await unlink(join(filesDir, program.file_name)).catch(() => {});
+      db.setFile(id, '', null);
+    }
+    return json(ctx.res, 200, { ok: true });
+  }
+
+  if ((entity === 'family' || entity === 'model') && kind === 'image') {
+    const table: 'families' | 'models' = entity === 'family' ? 'families' : 'models';
+    const row = db.getRef(table, id);
+    if (!row) return json(ctx.res, 404, { error: 'Не найдено' });
+    if (row.image) await unlink(join(screenshotsDir, String(row.image))).catch(() => {});
+    db.setImage(table, id, '');
+    return json(ctx.res, 200, { ok: true });
+  }
+
+  json(ctx.res, 404, { error: 'Неизвестный вид очистки' });
+}, true);
+
+// -------------------------------------------------------- admin: references
+
+route('GET', '/admin/ref/:table', (ctx) => {
+  const spec = refSpec(ctx.params.table);
+  if (!spec) return notFound(ctx);
+  const rows = db.listRef(spec.table);
+  html(ctx.res, 200, refListPage(ctx.user!, spec, rows, db.listFamilies(), refCounts(spec.table, rows)));
+}, true);
+
+route('GET', '/admin/ref/:table/new', (ctx) => {
+  const spec = refSpec(ctx.params.table);
+  if (!spec) return notFound(ctx);
+  const familyId = Number(ctx.url.searchParams.get('family_id')) || 0;
+  html(ctx.res, 200, refEditPage(ctx.user!, spec, null, db.listFamilies(), { familyId }));
+}, true);
+
+route('GET', '/admin/ref/:table/:id', (ctx) => {
+  const spec = refSpec(ctx.params.table);
+  if (!spec) return notFound(ctx);
+  const row = db.getRef(spec.table, Number(ctx.params.id));
+  if (!row) return notFound(ctx);
+  html(ctx.res, 200, refEditPage(ctx.user!, spec, row, db.listFamilies(), refEditExtras(spec.table, Number(row.id))));
+}, true);
+
+route('POST', '/admin/ref/:table/save', async (ctx) => {
+  const spec = refSpec(ctx.params.table);
+  if (!spec) return notFound(ctx);
+  const form = await readForm(ctx.req);
+  const id = Number(form.get('id')) || 0;
+  const row = id ? db.getRef(spec.table, id) : null;
+
+  const error = spec.validate(form, id);
+  if (error) {
+    return html(ctx.res, 400, refEditPage(ctx.user!, spec, row, db.listFamilies(), {
+      ...refEditExtras(spec.table, id),
+      familyId: Number(form.get('family_id')) || 0,
+      error,
+    }));
+  }
+
+  const values = spec.values(form, id);
+  let savedId = id;
+  if (row) {
+    db.updateRef(spec.table, id, values);
+  } else {
+    savedId = db.createRef(spec.table, values);
+  }
+  // A renamed family, model or category changes what the search haystack should contain.
+  db.rebuildSearchText();
+  redirect(ctx.res, `/admin/ref/${spec.table}/${savedId}`);
+}, true);
+
+route('POST', '/admin/ref/:table/delete/:id', async (ctx) => {
+  const spec = refSpec(ctx.params.table);
+  if (!spec) return notFound(ctx);
+  const id = Number(ctx.params.id);
+  const row = db.getRef(spec.table, id);
+  if (!row) return notFound(ctx);
+
+  const refusal = spec.beforeDelete(id);
+  if (refusal) {
+    const rows = db.listRef(spec.table);
+    return html(ctx.res, 409, refListPage(ctx.user!, spec, rows, db.listFamilies(), refCounts(spec.table, rows), '', refusal));
+  }
+
+  // Files first: the rows that name them are about to disappear.
+  if (spec.table === 'emulators') {
+    for (const name of db.emulatorFileNames(id)) await unlink(join(filesDir, name)).catch(() => {});
+  }
+  if (spec.table === 'families') {
+    for (const model of db.listModels(id)) {
+      if (model.image) await unlink(join(screenshotsDir, model.image)).catch(() => {});
+    }
+  }
+  if (row.image) await unlink(join(screenshotsDir, String(row.image))).catch(() => {});
+
+  db.deleteRef(spec.table, id);
+  db.rebuildSearchText();
+  redirect(ctx.res, `/admin/ref/${spec.table}`);
+}, true);
+
+route('POST', '/admin/reorder/:table', async (ctx) => {
+  const spec = refSpec(ctx.params.table);
+  if (!spec || !spec.reorderable) return json(ctx.res, 404, { error: 'Нельзя менять порядок' });
+  const form = await readForm(ctx.req, 64 * 1024);
+  const ids = (form.get('order') ?? '')
+    .split(',')
+    .map((value) => Number(value))
+    .filter((id) => Number.isInteger(id) && id > 0);
+  if (ids.length === 0) return json(ctx.res, 400, { error: 'Пустой порядок' });
+  db.setSortOrder(spec.table, ids);
+  json(ctx.res, 200, { ok: true });
+}, true);
+
+// ------------------------------------------------------------- admin: users
+
+route('GET', '/admin/users', (ctx) => {
+  html(ctx.res, 200, userListPage(ctx.user!, db.listUsers()));
+}, true);
+
+route('GET', '/admin/users/new', (ctx) => html(ctx.res, 200, userEditPage(ctx.user!, null)), true);
+
+route('GET', '/admin/users/:id', (ctx) => {
+  const row = db.getUserById(Number(ctx.params.id));
+  if (!row) return notFound(ctx);
+  html(ctx.res, 200, userEditPage(ctx.user!, row));
+}, true);
+
+route('POST', '/admin/users/save', async (ctx) => {
+  const form = await readForm(ctx.req);
+  const id = Number(form.get('id')) || 0;
+  const row = id ? db.getUserById(id) : null;
+  const username = (form.get('username') ?? '').trim().slice(0, 60);
+  const displayName = (form.get('display_name') ?? '').trim().slice(0, 120);
+  const password = form.get('password') ?? '';
+
+  const fail = (message: string): void => html(ctx.res, 400, userEditPage(ctx.user!, row, message));
+
+  if (!username) return fail('Логин обязателен.');
+  const taken = db.getUserByName(username);
+  if (taken && taken.id !== id) return fail(`Логин «${username}» уже занят.`);
+  if (!row && password.length < 8) return fail('Пароль короче 8 символов.');
+  if (password && password.length < 8) return fail('Пароль короче 8 символов.');
+
+  if (row) {
+    db.updateUser(id, username, displayName);
+    if (password) db.setPasswordHash(id, hashPassword(password));
+  } else {
+    db.createUser(username, hashPassword(password), displayName);
+  }
+  redirect(ctx.res, '/admin/users');
+}, true);
+
+route('POST', '/admin/users/delete/:id', (ctx) => {
+  const id = Number(ctx.params.id);
+  const row = db.getUserById(id);
+  if (!row) return notFound(ctx);
+  if (id === ctx.user!.id) {
+    return html(ctx.res, 409, userListPage(ctx.user!, db.listUsers(), '', 'Нельзя удалить собственную учётную запись.'));
+  }
+  if (db.countUsers() <= 1) {
+    return html(ctx.res, 409, userListPage(ctx.user!, db.listUsers(), '', 'Это единственный администратор.'));
+  }
+  db.deleteUser(id);
+  redirect(ctx.res, '/admin/users');
 }, true);
 
 route('GET', '/admin/password', (ctx) => html(ctx.res, 200, passwordPage(ctx.user!)), true);
@@ -285,27 +478,56 @@ route('POST', '/admin/password', async (ctx) => {
   html(ctx.res, 200, passwordPage(user, 'Пароль изменён.'));
 }, true);
 
-// ------------------------------------------------------------- helpers
+// ------------------------------------------------------------------ helpers
 
-type DownloadTarget = { kind: 'file'; name: string } | { kind: 'external'; url: string } | null;
-
-function downloadTarget(p: Program): DownloadTarget {
-  if (p.file_name) return { kind: 'file', name: p.file_name };
-  if (p.download_url) return { kind: 'external', url: p.download_url };
-  return null;
+function editData(program: ProgramRow | null) {
+  return {
+    families: db.listFamilies(),
+    categories: db.listCategories(),
+    models: db.listModels(),
+    emulators: db.listEmulators(),
+    selectedModels: program ? db.modelIdsForProgram(program.id) : [],
+  };
 }
 
-/** The emulator downloads the package itself, so it needs an absolute URL. */
-function runTarget(p: Program): string {
-  if (!p.run_enabled) return '';
-  const packageUrl = p.run_url || (p.file_name ? `${config.siteUrl}/files/${p.file_name}` : p.download_url);
-  if (!packageUrl) return '';
-  const url = new URL(config.emulator.baseUrl);
-  if (p.run_params) {
-    for (const [key, value] of new URLSearchParams(p.run_params)) url.searchParams.set(key, value);
+/** "Программ" column on the reference lists. */
+function refCounts(table: RefTable, rows: db.RefRow[]): Map<number, number> {
+  const counts = new Map<number, number>();
+  for (const row of rows) {
+    const id = Number(row.id);
+    if (table === 'families') counts.set(id, db.countProgramsInFamily(id));
+    else if (table === 'models') counts.set(id, db.countProgramsWithModel(id));
+    else if (table === 'emulators') counts.set(id, db.emulatorFileNames(id).length);
+    else counts.set(id, db.listPrograms({ categoryId: id, includeHidden: true, perPage: 1 }).total);
   }
-  url.searchParams.set(config.emulator.param, packageUrl);
-  return url.toString();
+  return counts;
+}
+
+function refEditExtras(table: RefTable, id: number): { childModels?: db.RefRow[]; programCount?: number } {
+  if (table === 'families') {
+    return { childModels: db.listRef('models', id) as unknown as db.RefRow[], programCount: db.countProgramsInFamily(id) };
+  }
+  if (table === 'models') return { programCount: db.countProgramsWithModel(id) };
+  if (table === 'emulators') return { programCount: db.emulatorFileNames(id).length };
+  return {};
+}
+
+/** Reads the body as an image, stores it, removes the previous one. Answers on failure. */
+async function saveImage(ctx: Ctx, prefix: string, previous: string): Promise<string | null> {
+  const body = await readBody(ctx.req, config.maxScreenshotBytes);
+  const kind = detectImage(body);
+  if (!kind) {
+    json(ctx.res, 400, { error: 'Это не PNG, JPEG, GIF или WebP' });
+    return null;
+  }
+  const name = `${prefix}-${randomBytes(4).toString('hex')}${kind.ext}`;
+  if (!isSafeName(name)) {
+    json(ctx.res, 400, { error: 'Не удалось построить имя файла' });
+    return null;
+  }
+  await writeFile(join(screenshotsDir, name), body);
+  if (previous && previous !== name) await unlink(join(screenshotsDir, previous)).catch(() => {});
+  return name;
 }
 
 function uniqueSlug(candidate: string, exceptId: number): string {
@@ -316,23 +538,12 @@ function uniqueSlug(candidate: string, exceptId: number): string {
   return slug;
 }
 
-function safeUrl(value: string | null): string {
-  const raw = (value ?? '').trim().slice(0, 500);
-  if (!raw) return '';
-  try {
-    const url = new URL(raw);
-    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : '';
-  } catch {
-    return '';
-  }
-}
-
-function storedFileName(id: number, original: string): string {
+function storedFileName(prefix: string, original: string): string {
   const base = basename(original.replaceAll('\\', '/'));
   const ext = (extname(base).toLowerCase().match(/^\.[a-z0-9]{1,10}$/) ?? [''])[0];
   const stem = slugify(base.slice(0, base.length - extname(base).length)).slice(0, 60) || 'file';
-  const name = `${id}-${stem}${ext}`;
-  return isSafeName(name) ? name : `${id}-file${ext}`;
+  const name = `${prefix}-${stem}${ext}`;
+  return isSafeName(name) ? name : `${prefix}-file${ext}`;
 }
 
 function notFound(ctx: Ctx): void {
@@ -379,7 +590,6 @@ async function dispatch(req: IncomingMessage, res: ServerResponse): Promise<void
     return;
   }
 
-  if (path === '/favicon.ico') return redirect(res, '/static/favicon.svg', 301);
   notFound({ req, res, url, params: {}, user });
 }
 

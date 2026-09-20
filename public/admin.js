@@ -1,8 +1,7 @@
-/* Admin helpers: save through fetch, upload files with a progress indicator. */
+/* Admin helpers: save through fetch, uploads with progress, drag-and-drop ordering. */
 (function () {
   'use strict';
 
-  var form = document.querySelector('[data-editor]');
   var status = document.querySelector('[data-status]');
 
   function say(message, isError) {
@@ -29,16 +28,32 @@
     });
   }
 
-  if (form) {
-    form.addEventListener('submit', function (event) {
+  /** /admin/upload/<entity>/<id>/<kind>, plus ?name= for plain files. */
+  function uploadUrl(entity, id, kind, file) {
+    var url = '/admin/upload/' + entity + '/' + id + '/' + kind;
+    return kind === 'file' ? url + '?name=' + encodeURIComponent(file.name) : url;
+  }
+
+  function label(kind) {
+    if (kind === 'screenshot') return 'Скриншот';
+    if (kind === 'image') return 'Картинка';
+    return 'Файл';
+  }
+
+  // ------------------------------------------------ program editor: save, then upload
+
+  var editor = document.querySelector('form[data-editor]');
+  if (editor) {
+    editor.addEventListener('submit', function (event) {
       event.preventDefault();
-      var isNew = !form.querySelector('input[name="id"]').value;
+      var isNew = !editor.querySelector('input[name="id"]').value;
+      var entity = editor.getAttribute('data-entity');
       say('Сохраняю…');
 
-      fetch('/admin/save', {
+      fetch(editor.getAttribute('action'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-        body: new URLSearchParams(new FormData(form)),
+        body: new URLSearchParams(new FormData(editor)),
       })
         .then(function (res) {
           return res.json().then(function (body) {
@@ -48,15 +63,13 @@
         })
         .then(function (saved) {
           var uploads = [];
-          form.querySelectorAll('[data-upload]').forEach(function (input) {
+          editor.querySelectorAll('[data-upload]').forEach(function (input) {
             if (!input.files || !input.files[0]) return;
             var file = input.files[0];
             var kind = input.getAttribute('data-upload');
-            var url = '/admin/upload/' + saved.id + '/' + kind +
-              (kind === 'file' ? '?name=' + encodeURIComponent(file.name) : '');
             uploads.push(function () {
-              return putFile(url, file, function (percent) {
-                say((kind === 'screenshot' ? 'Скриншот' : 'Файл') + ': ' + percent + '%');
+              return putFile(uploadUrl(entity, saved.id, kind, file), file, function (percent) {
+                say(label(kind) + ': ' + percent + '%');
               });
             });
           });
@@ -73,17 +86,36 @@
           }
           say('Сохранено.');
         })
-        .catch(function (err) {
-          say(err.message, true);
-        });
+        .catch(function (err) { say(err.message, true); });
     });
   }
 
+  // --------------------------------- reference forms: upload as soon as a file is picked
+
+  document.querySelectorAll('form[data-entity][data-id]:not([data-editor])').forEach(function (form) {
+    var entity = form.getAttribute('data-entity');
+    var id = form.getAttribute('data-id');
+    form.querySelectorAll('[data-upload]').forEach(function (input) {
+      input.addEventListener('change', function () {
+        if (!input.files || !input.files[0]) return;
+        var file = input.files[0];
+        var kind = input.getAttribute('data-upload');
+        say(label(kind) + ': 0%');
+        putFile(uploadUrl(entity, id, kind, file), file, function (percent) {
+          say(label(kind) + ': ' + percent + '%');
+        })
+          .then(function () { window.location.reload(); })
+          .catch(function (err) { say(err.message, true); });
+      });
+    });
+  });
+
+  // ------------------------------------------------------------------- clear buttons
+
   document.querySelectorAll('[data-clear]').forEach(function (button) {
     button.addEventListener('click', function () {
-      var what = button.getAttribute('data-clear');
-      if (!window.confirm(what === 'screenshot' ? 'Удалить скриншот?' : 'Удалить файл программы?')) return;
-      fetch('/admin/clear/' + button.getAttribute('data-id') + '/' + what, {
+      if (!window.confirm('Удалить загруженный файл?')) return;
+      fetch('/admin/clear/' + button.getAttribute('data-clear'), {
         method: 'POST',
         headers: { Accept: 'application/json' },
       })
@@ -95,9 +127,90 @@
     });
   });
 
-  document.querySelectorAll('form[data-confirm]').forEach(function (f) {
-    f.addEventListener('submit', function (event) {
-      if (!window.confirm(f.getAttribute('data-confirm'))) event.preventDefault();
+  // ---------------------------------------------------------------- drag-and-drop order
+
+  document.querySelectorAll('table[data-reorder]').forEach(function (table) {
+    var tableName = table.getAttribute('data-reorder');
+    var tbody = table.querySelector('tbody');
+    if (!tbody) return;
+    var dragged = null;
+
+    function persist() {
+      var order = Array.prototype.map.call(tbody.rows, function (row) { return row.getAttribute('data-id'); });
+      fetch('/admin/reorder/' + tableName, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+        body: new URLSearchParams({ order: order.join(',') }),
+      })
+        .then(function (res) {
+          if (!res.ok) throw new Error('порядок не сохранился');
+          say('Порядок сохранён.');
+        })
+        .catch(function (err) { say(err.message, true); });
+    }
+
+    tbody.addEventListener('dragstart', function (event) {
+      dragged = event.target.closest('tr');
+      if (!dragged) return;
+      event.dataTransfer.effectAllowed = 'move';
+      // Firefox refuses to start a drag without a payload.
+      event.dataTransfer.setData('text/plain', dragged.getAttribute('data-id') || '');
+      dragged.classList.add('dragging');
+    });
+
+    tbody.addEventListener('dragover', function (event) {
+      if (!dragged) return;
+      event.preventDefault();
+      var over = event.target.closest('tr');
+      if (!over || over === dragged) return;
+      var box = over.getBoundingClientRect();
+      var before = event.clientY < box.top + box.height / 2;
+      tbody.insertBefore(dragged, before ? over : over.nextSibling);
+    });
+
+    tbody.addEventListener('drop', function (event) { event.preventDefault(); });
+
+    tbody.addEventListener('dragend', function () {
+      if (!dragged) return;
+      dragged.classList.remove('dragging');
+      dragged = null;
+      persist();
+    });
+
+    // Keyboard and touch fallback: HTML5 drag events serve neither.
+    tbody.addEventListener('click', function (event) {
+      var button = event.target.closest('[data-move]');
+      if (!button) return;
+      var row = button.closest('tr');
+      var sibling = button.getAttribute('data-move') === 'up'
+        ? row.previousElementSibling
+        : row.nextElementSibling;
+      if (!sibling) return;
+      if (button.getAttribute('data-move') === 'up') tbody.insertBefore(row, sibling);
+      else tbody.insertBefore(sibling, row);
+      persist();
+    });
+  });
+
+  // ------------------------------------------- show only the models of the chosen family
+
+  var familySelect = document.querySelector('[data-family-select]');
+  var modelGroups = document.querySelector('[data-model-groups]');
+  if (familySelect && modelGroups) {
+    var syncGroups = function () {
+      modelGroups.querySelectorAll('.model-group').forEach(function (group) {
+        group.hidden = group.getAttribute('data-family') !== familySelect.value;
+      });
+    };
+    familySelect.addEventListener('change', syncGroups);
+    syncGroups();
+  }
+
+  // ------------------------------------------------------------------ confirmations
+
+  document.querySelectorAll('form[data-confirm]').forEach(function (form) {
+    form.addEventListener('submit', function (event) {
+      if (!window.confirm(form.getAttribute('data-confirm'))) event.preventDefault();
     });
   });
 })();

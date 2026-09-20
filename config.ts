@@ -20,21 +20,11 @@ export type Config = {
   siteTagline: string;
   /** Where the database, screenshots and program files live. */
   dataDir: string;
-  /** Emulator that downloads the program package by URL itself. */
-  emulator: {
-    /** Base URL of the WASM emulator page. */
-    baseUrl: string;
-    /** Query parameter that carries the absolute URL of the package. */
-    param: string;
-  };
-  /** Origins allowed to fetch /files and /screenshots cross-origin (the emulator). "*" allows all. */
+  /** Origins allowed to fetch /files and /screenshots cross-origin (the emulators). "*" allows all. */
   corsOrigins: string[];
   maxScreenshotBytes: number;
   maxFileBytes: number;
   sessionTtlHours: number;
-  /** Suggestions for the admin form; free text is still allowed. */
-  platforms: string[];
-  categories: string[];
 };
 
 const defaults: Config = {
@@ -44,16 +34,10 @@ const defaults: Config = {
   siteName: 'Каталог ретро-софта',
   siteTagline: 'Программы для компьютеров прошлого века',
   dataDir: join(rootDir, 'data'),
-  emulator: {
-    baseUrl: 'https://emu.example.com/',
-    param: 'url',
-  },
   corsOrigins: ['*'],
   maxScreenshotBytes: 2 * 1024 * 1024,
   maxFileBytes: 64 * 1024 * 1024,
   sessionTtlHours: 24 * 14,
-  platforms: ['Агат', 'БК-0010', 'Вектор-06Ц', 'Корвет', 'Микроша', 'Радио-86РК', 'Специалист', 'ZX Spectrum', 'MSX', 'IBM PC'],
-  categories: ['Игра', 'Утилита', 'Демо', 'Язык программирования', 'ОС', 'Документация'],
 };
 
 function loadFile(): Partial<Config> {
@@ -72,7 +56,6 @@ const file = loadFile();
 export const config: Config = {
   ...defaults,
   ...file,
-  emulator: { ...defaults.emulator, ...(file.emulator ?? {}) },
   port: Number(process.env.PORT ?? file.port ?? defaults.port),
   host: process.env.HOST ?? file.host ?? defaults.host,
   siteUrl: (process.env.SITE_URL ?? file.siteUrl ?? defaults.siteUrl).replace(/\/+$/, ''),

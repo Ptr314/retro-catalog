@@ -1,45 +1,41 @@
 import { config } from '../config.ts';
-import type { Program } from '../db.ts';
+import type { Facets, Family, Model, ProgramRow } from '../db.ts';
 import { escapeHtml, formatBytes } from '../http.ts';
 import { layout } from './layout.ts';
+import { imageTag, pager, plural } from './parts.ts';
 
 export type ListQuery = {
   q: string;
-  platform: string;
-  category: string;
+  familyId: number | null;
+  modelId: number | null;
+  categoryId: number | null;
   year: number | null;
   sort: string;
 };
 
-export type Facets = {
-  platforms: { value: string; n: number }[];
-  categories: { value: string; n: number }[];
-  years: number[];
-};
-
-function screenshot(p: Program, cls: string): string {
-  if (p.screenshot) {
-    return `<img class="${cls}" src="/screenshots/${escapeHtml(p.screenshot)}" alt="Скриншот: ${escapeHtml(p.title)}" loading="lazy">`;
-  }
-  return `<div class="${cls} shot-empty"><span>${escapeHtml(p.platform || '?')}</span></div>`;
-}
-
-function card(p: Program): string {
-  const meta = [p.platform, p.year ? String(p.year) : ''].filter(Boolean).join(' · ');
+function card(p: ProgramRow): string {
+  const meta = [p.family_name, p.year ? String(p.year) : ''].filter(Boolean).join(' · ');
   return `<article class="card">
-  <a class="card-shot" href="/p/${escapeHtml(p.slug)}">${screenshot(p, 'shot')}</a>
+  <a class="card-shot" href="/p/${escapeHtml(p.slug)}">${imageTag(p.screenshot, `Скриншот: ${p.title}`, 'shot', p.family_name)}</a>
   <div class="card-body">
     <h3><a href="/p/${escapeHtml(p.slug)}">${escapeHtml(p.title)}</a></h3>
     <p class="card-meta">${escapeHtml(meta)}</p>
     ${p.author ? `<p class="card-author">${escapeHtml(p.author)}</p>` : ''}
+    ${p.author_wanted ? '<p class="card-author"><span class="badge wanted">разыскивается автор</span></p>' : ''}
   </div>
 </article>`;
 }
 
-function queryString(q: ListQuery, overrides: Record<string, string | number | null>): string {
+export function queryString(q: ListQuery, overrides: Record<string, string | number | null>): string {
   const params = new URLSearchParams();
   const merged: Record<string, string | number | null> = {
-    q: q.q, platform: q.platform, category: q.category, year: q.year, sort: q.sort, ...overrides,
+    q: q.q,
+    family: q.familyId,
+    model: q.modelId,
+    category: q.categoryId,
+    year: q.year,
+    sort: q.sort,
+    ...overrides,
   };
   for (const [key, value] of Object.entries(merged)) {
     if (value !== null && value !== '' && value !== undefined) params.set(key, String(value));
@@ -48,25 +44,34 @@ function queryString(q: ListQuery, overrides: Record<string, string | number | n
   return s ? `?${s}` : '/';
 }
 
-function options(values: { value: string; n: number }[], selected: string, anyLabel: string): string {
-  const head = `<option value="">${escapeHtml(anyLabel)}</option>`;
-  return head + values
-    .map((v) => `<option value="${escapeHtml(v.value)}"${v.value === selected ? ' selected' : ''}>${escapeHtml(v.value)} (${v.n})</option>`)
-    .join('');
+function idOptions(values: { id: number; name: string; n?: number }[], selected: number | null, anyLabel: string): string {
+  return (
+    `<option value="">${escapeHtml(anyLabel)}</option>` +
+    values
+      .map(
+        (v) =>
+          `<option value="${v.id}"${v.id === selected ? ' selected' : ''}>${escapeHtml(v.name)}${
+            v.n === undefined ? '' : ` (${v.n})`
+          }</option>`,
+      )
+      .join('')
+  );
 }
 
 export function listPage(
-  rows: Program[],
+  rows: ProgramRow[],
   total: number,
   page: number,
   pages: number,
   q: ListQuery,
   facets: Facets,
+  families: Family[],
 ): string {
   const filters = `<form class="filters" method="get" action="/">
-  <input class="search" type="search" name="q" value="${escapeHtml(q.q)}" placeholder="Название, автор, тег…" aria-label="Поиск">
-  <select name="platform" aria-label="Платформа">${options(facets.platforms, q.platform, 'Все платформы')}</select>
-  <select name="category" aria-label="Категория">${options(facets.categories, q.category, 'Все категории')}</select>
+  <input class="search" type="search" name="q" value="${escapeHtml(q.q)}" placeholder="Название, автор…" aria-label="Поиск">
+  <select name="family" aria-label="Семейство">${idOptions(families, q.familyId, 'Все семейства')}</select>
+  <select name="model" aria-label="Модель">${idOptions(facets.models, q.modelId, 'Все модели')}</select>
+  <select name="category" aria-label="Категория">${idOptions(facets.categories, q.categoryId, 'Все категории')}</select>
   <select name="year" aria-label="Год">
     <option value="">Все годы</option>
     ${facets.years.map((y) => `<option value="${y}"${q.year === y ? ' selected' : ''}>${y}</option>`).join('')}
@@ -77,20 +82,12 @@ export function listPage(
       .join('')}
   </select>
   <button type="submit">Показать</button>
-  ${q.q || q.platform || q.category || q.year ? '<a class="reset" href="/">сбросить</a>' : ''}
+  ${q.q || q.familyId || q.modelId || q.categoryId || q.year ? '<a class="reset" href="/">сбросить</a>' : ''}
 </form>`;
 
   const grid = rows.length
     ? `<div class="grid">${rows.map(card).join('\n')}</div>`
     : '<p class="empty">Ничего не нашлось. Попробуйте изменить фильтры.</p>';
-
-  const pager = pages > 1
-    ? `<nav class="pager">
-      ${page > 1 ? `<a href="${queryString(q, { page: page - 1 })}">← назад</a>` : '<span></span>'}
-      <span class="pager-pos">страница ${page} из ${pages}</span>
-      ${page < pages ? `<a href="${queryString(q, { page: page + 1 })}">вперёд →</a>` : '<span></span>'}
-    </nav>`
-    : '';
 
   return layout(
     { description: config.siteTagline },
@@ -99,43 +96,28 @@ export function listPage(
   <p class="count">${total} ${plural(total, 'программа', 'программы', 'программ')}</p>
 </section>
 ${grid}
-${pager}`,
+${pager(page, pages, (n) => queryString(q, { page: n }))}`,
   );
 }
 
-function plural(n: number, one: string, few: string, many: string): string {
-  const mod100 = n % 100;
-  const mod10 = n % 10;
-  if (mod100 >= 11 && mod100 <= 14) return many;
-  if (mod10 === 1) return one;
-  if (mod10 >= 2 && mod10 <= 4) return few;
-  return many;
-}
-
-export function programPage(p: Program, links: { download: string; run: string }): string {
+export function programPage(p: ProgramRow, models: Model[], links: { download: string }): string {
   const rows: [string, string][] = [
-    ['Платформа', p.platform],
-    ['Категория', p.category],
+    ['Семейство', p.family_name],
+    ['Модели', models.map((m) => m.name).join(', ')],
+    ['Категория', p.category_name ?? ''],
     ['Год', p.year ? String(p.year) : ''],
-    ['Автор', p.author],
-    ['Издатель', p.publisher],
+    ['Автор', p.author_wanted ? 'разыскивается' : p.author],
     ['Размер', formatBytes(p.file_size)],
   ].filter((row) => row[1] !== '') as [string, string][];
 
-  const tags = p.tags
-    .split(',')
-    .map((t) => t.trim())
-    .filter(Boolean);
-
-  const actions = [
-    links.run ? `<a class="button primary" href="${escapeHtml(links.run)}" target="_blank" rel="noopener">▶ Запустить в эмуляторе</a>` : '',
-    links.download ? `<a class="button" href="${escapeHtml(links.download)}"${p.download_url && !p.file_name ? ' rel="nofollow noopener"' : ''}>↓ Скачать</a>` : '',
-  ].filter(Boolean).join('\n');
+  const actions = links.download
+    ? `<a class="button" href="${escapeHtml(links.download)}">↓ Скачать</a>`
+    : '';
 
   return layout(
     { title: p.title, description: p.description.slice(0, 200) },
     `<article class="program">
-  <div class="program-shot">${screenshot(p, 'shot-big')}</div>
+  <div class="program-shot">${imageTag(p.screenshot, `Скриншот: ${p.title}`, 'shot-big', p.family_name)}</div>
   <div class="program-info">
     <h1>${escapeHtml(p.title)}</h1>
     <dl class="meta">
@@ -143,7 +125,6 @@ export function programPage(p: Program, links: { download: string; run: string }
     </dl>
     <div class="actions">${actions || '<p class="empty">Файл пока не добавлен.</p>'}</div>
     ${p.description ? `<div class="description">${paragraphs(p.description)}</div>` : ''}
-    ${tags.length ? `<p class="tags">${tags.map((t) => `<a class="tag" href="/?q=${encodeURIComponent(t)}">${escapeHtml(t)}</a>`).join(' ')}</p>` : ''}
     <p class="counters">скачиваний: ${p.downloads} · запусков: ${p.runs}</p>
   </div>
 </article>
@@ -151,6 +132,7 @@ export function programPage(p: Program, links: { download: string; run: string }
   );
 }
 
+/** Interim: descriptions are Markdown sources, rendered properly from stage 2 on. */
 function paragraphs(textValue: string): string {
   return textValue
     .split(/\n{2,}/)

@@ -28,15 +28,17 @@ function askPassword(prompt: string): Promise<string> {
   });
 }
 
-const [command, login] = process.argv.slice(2);
+const [command, login, displayName] = process.argv.slice(2);
 
 if (command === 'list') {
-  for (const user of listUsers()) console.log(`${user.username}\t${user.created_at}`);
+  for (const user of listUsers()) {
+    console.log(`${user.username}\t${user.display_name || '—'}\t${user.created_at}`);
+  }
   process.exit(0);
 }
 
 if (!command || !login || (command !== 'add' && command !== 'passwd')) {
-  console.log('usage: user.ts add|passwd <login>   |   user.ts list');
+  console.log('usage: user.ts add|passwd <login> [имя]   |   user.ts list');
   process.exit(1);
 }
 
@@ -57,7 +59,7 @@ if (command === 'add') {
     console.error(`Пользователь ${login} уже есть. Смените пароль: user.ts passwd ${login}`);
     process.exit(1);
   }
-  createUser(login, hashPassword(password));
+  createUser(login, hashPassword(password), displayName ?? '');
   console.log(`Создан пользователь ${login}. Всего: ${countUsers()}.`);
 } else {
   if (!existing) {

@@ -4,14 +4,8 @@
   "siteUrl": "https://retro.example.com",
   "siteName": "Каталог ретро-софта",
   "siteTagline": "Программы для компьютеров прошлого века",
-  "emulator": {
-    "baseUrl": "https://emu.example.com/",
-    "param": "url"
-  },
   "corsOrigins": ["https://emu.example.com"],
   "maxScreenshotBytes": 2097152,
   "maxFileBytes": 67108864,
-  "sessionTtlHours": 336,
-  "platforms": ["Агат", "БК-0010", "Вектор-06Ц", "Корвет", "Микроша", "Радио-86РК", "Специалист", "ZX Spectrum", "MSX", "IBM PC"],
-  "categories": ["Игра", "Утилита", "Демо", "Язык программирования", "ОС", "Документация"]
+  "sessionTtlHours": 336
 }

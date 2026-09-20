@@ -209,3 +209,18 @@ button:hover, .button:hover { border-color: var(--accent-dim); text-decoration: 
   .admin-table .thumb, .admin-table td:nth-child(3), .admin-table th:nth-child(3) { display: none; }
   .site-main { padding: 1rem .8rem 2rem; }
 }
+
+/* --- reference tables: drag handles and ordering --------------------------- */
+.admin-table .reorder-col { width: 6rem; white-space: nowrap; }
+.reorder-handle { cursor: grab; color: var(--muted); padding-right: .25rem; }
+.admin-table tr.dragging { opacity: .5; background: var(--panel); }
+.admin-table tr[draggable="true"] { cursor: default; }
+.admin-table [data-move] { padding: 0 .15rem; }
+
+/* --- program editor: model checkboxes -------------------------------------- */
+.model-group { border: 1px solid var(--line); border-radius: 6px; padding: .5rem .75rem; margin: 0 0 .75rem; }
+.model-group legend { padding: 0 .35rem; color: var(--muted); font-size: .85rem; }
+.model-group label.check { margin: .15rem 0; }
+
+/* --- badges ----------------------------------------------------------------- */
+.badge.wanted { background: #4a3a10; color: #f0c674; }
