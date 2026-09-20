@@ -112,7 +112,7 @@ function fieldInput(
       </label>${hint}`;
     }
     case 'markdown':
-      return mdEditor(field.name, field.label, row ? String(row[field.name] ?? '') : '');
+      return mdEditor(field.name, field.label, row ? String(row[field.name] ?? '') : '', 8) + hint;
     case 'image': {
       const image = row ? String(row.image ?? '') : '';
       return `<div class="upload">

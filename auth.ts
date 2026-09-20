@@ -75,12 +75,30 @@ export function currentUser(req: IncomingMessage): User | null {
   return uid === null ? null : getUserById(uid);
 }
 
-/** Defence in depth on top of SameSite=Lax: state-changing requests must come from our own origin. */
+/**
+ * Defence in depth on top of SameSite=Lax: state-changing requests must come from our
+ * own origin. "Our own" means the host the browser is actually talking to (the Host
+ * header), not only config.siteUrl — the same server answers on localhost, 127.0.0.1
+ * and its public name, and each is a different origin to the browser.
+ *
+ * Trusting Host is safe here because the session is a host-scoped cookie: a page on
+ * another site has a different Origin host, and a DNS-rebinding page that does match
+ * its own Host carries no session cookie for it.
+ */
 export function sameOrigin(req: IncomingMessage): boolean {
+  const host = String(req.headers.host ?? '').toLowerCase();
+  const ours = (value: string): boolean => {
+    try {
+      const url = new URL(value);
+      return url.origin === config.siteUrl || (host !== '' && url.host.toLowerCase() === host);
+    } catch {
+      return false; // "null" and other opaque origins
+    }
+  };
   const origin = (req.headers.origin as string) || '';
-  if (origin) return origin === config.siteUrl;
+  if (origin) return ours(origin);
   const referer = (req.headers.referer as string) || '';
-  if (referer) return referer.startsWith(`${config.siteUrl}/`);
+  if (referer) return ours(referer);
   return false;
 }
 

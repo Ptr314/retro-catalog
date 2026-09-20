@@ -162,7 +162,7 @@ export function editPage(user: User, p: ProgramRow | null, data: EditData, error
       const owned = data.models.filter((m) => m.family_id === f.id);
       if (owned.length === 0) return '';
       return `<fieldset class="model-group" data-family="${f.id}">
-      <legend>${escapeHtml(f.name)}</legend>
+      <legend>Модели: ${escapeHtml(f.name)}</legend>
       ${owned
         .map(
           (m) => `<label class="check"><input type="checkbox" name="models" value="${m.id}"${
@@ -206,13 +206,18 @@ export function editPage(user: User, p: ProgramRow | null, data: EditData, error
       <label class="check"><input type="checkbox" name="author_wanted" value="1"${p?.author_wanted ? ' checked' : ''}> Разыскивается автор</label>
       ${mdEditor('description', 'Описание', p?.description ?? '')}
       <label class="check"><input type="checkbox" name="published" value="1"${!p || p.published ? ' checked' : ''}> Показывать в каталоге</label>
+      ${modelGroups
+        ? `<div data-model-groups>${modelGroups}</div>`
+        : '<small class="hint">Моделей пока нет. <a href="/admin/ref/models/new">Добавить модель</a>.</small>'}
     </section>
 
     <section class="panel">
-      <h2>Модели</h2>
-      ${modelGroups
-        ? `<p class="hint">Показаны модели выбранного семейства.</p><div data-model-groups>${modelGroups}</div>`
-        : '<p class="muted">Моделей пока нет. <a href="/admin/ref/models/new">Добавить модель</a>.</p>'}
+      <h2>Файлы для эмуляторов</h2>
+      ${data.emulators.length === 0
+        ? '<p class="muted">Эмуляторов пока нет. <a href="/admin/ref/emulators/new">Добавьте эмулятор</a>.</p>'
+        : isNew
+          ? '<p class="muted">Сохраните программу, чтобы загрузить файлы.</p>'
+          : data.emulators.map((emu) => emulatorSlot(p!, emu, data.emulatorFiles)).join('')}
     </section>
 
     <section class="panel">
@@ -237,14 +242,6 @@ export function editPage(user: User, p: ProgramRow | null, data: EditData, error
       </div>
     </section>
 
-    <section class="panel">
-      <h2>Файлы для эмуляторов</h2>
-      ${data.emulators.length === 0
-        ? '<p class="muted">Эмуляторов пока нет. <a href="/admin/ref/emulators/new">Добавьте эмулятор</a>.</p>'
-        : isNew
-          ? '<p class="muted">Сохраните программу, чтобы загрузить файлы.</p>'
-          : data.emulators.map((emu) => emulatorSlot(p!, emu, data.emulatorFiles)).join('')}
-    </section>
   </div>
 
   ${p ? `</form>

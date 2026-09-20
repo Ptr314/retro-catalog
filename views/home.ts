@@ -50,11 +50,11 @@ export function homePage(families: FamilyCard[], view: ViewMode): string {
     { description: config.siteTagline },
     `<section class="toolbar">
   <div>
-    <h1 class="home-title">${escapeHtml(config.siteName)}</h1>
+    <h1 class="home-title">Выберите компьютер</h1>
     <p class="count">${escapeHtml(config.siteTagline)}</p>
   </div>
   <div class="toolbar-right">
-    <p class="count"><a href="/catalog">все программы →</a></p>
+    <p class="count"><a href="/catalog">все программы</a></p>
     ${viewToggle(view, (mode) => `/?view=${mode}`)}
   </div>
 </section>

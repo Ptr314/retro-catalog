@@ -48,7 +48,9 @@ Flat module layout, each file one concern; `views/` renders, everything else is 
 
 **Markdown (`markdown.ts`).** Descriptions are stored as Markdown and rendered on output. The security property is the ordering: `escapeHtml()` runs over the entire source *once, before any rule*, so the text can no longer contain `< > & " '` and every tag in the output is one this module produced. Link URLs are whitelisted against an anchored regex on the already-escaped string, which is why `javascript:` and `data:` cannot slip through. The editor's preview tab round-trips through `POST /admin/preview` rather than mirroring the renderer in JS — one renderer, one behaviour.
 
-**`config.siteUrl` is load-bearing in two unrelated places:** it builds the absolute file URLs handed to emulators, and it is the origin compared in `sameOrigin()`. If it does not match how the site is actually reached, launch links break *and* every admin POST returns 403.
+**`config.siteUrl` builds the absolute file URLs handed to emulators**, so it must be the address an emulator can actually fetch from; if it is wrong, launch links break.
+
+**`sameOrigin()` (`auth.ts`) accepts the request's own `Host`, not only `siteUrl`.** The same server answers on `localhost`, `127.0.0.1` and its public name, and to a browser each is a different origin — comparing against `siteUrl` alone made every POST (saving, the Markdown preview, uploads) fail with 403 for anyone who opened the admin by another name. Trusting `Host` is safe because the session is a host-scoped cookie: a foreign page has a different Origin host, and a DNS-rebinding page that matches its own `Host` has no session cookie for it. Rejections are logged as `403 origin: … from <origin>, host <host>`, and a plain form submit gets an HTML page naming both addresses instead of raw JSON.
 
 **Emulator handoff.** Each row in `emulators` carries a `url_template` containing `{url}`; `emulatorLaunchUrl()` substitutes the URL-encoded `{siteUrl}/files/{name}` of that program's per-emulator file. `GET /run/:slug/:emu` bumps both counters (`programs.runs` and the slot's own) and answers 302 — never 301, which browsers would cache and freeze the counter. The emulator fetches the file itself cross-origin, which is why `/files/` and `/screenshots/` carry CORS headers and `sendFile` implements `Range`.
 
@@ -64,11 +66,24 @@ Flat module layout, each file one concern; `views/` renders, everything else is 
 
 The directory name `screenshots` is now slightly inaccurate — it holds every image — but `/screenshots/` is wired into `deploy/nginx.conf` and the backup instructions, so the prefixes carry the distinction instead. **SQLite never deletes files**: any handler that removes a row owning a file must `unlink` it first, as the program, emulator and family delete handlers do.
 
+## Visual design (`public/style.css`)
+
+The page is a Soviet lab console; the screenshots are the cathode-ray tubes set into it. That split is the whole system, and it is easy to erode:
+
+- **Chrome is flat and square.** Navy panel (`--bg`, `--panel`), 2px engraved rules (`--line`), zero border-radius, no soft shadows, no gradients as decoration. The faint 28px pixel grid and the tick scale under the header are the only ornament.
+- **Light belongs to screens and to things you can press.** Image housings (`.card-shot`, `.program-shot`, `.family-head-shot`, `.family-row-shot`) are the only rounded elements (`--tube`), and carry scanlines plus a vignette on `::after`; images inside use `image-rendering: pixelated` because 8-bit screenshots must scale as pixels. Amber (`--accent`) is phosphor: headings, data, outlines. Safety orange (`--hot`) is reserved for the primary action and live lamps — if orange shows up on something that cannot be pressed or is not a status, it is wrong.
+- **Two typefaces, and Handjet only when large.** Handjet is dot-matrix: its letters are built from separate dots, and below roughly 1.6rem the gaps between them merge into horizontal lines, so the text looks struck through. It is therefore reserved for big display text — page headings, the brand, family names, empty-tube placeholders, the error code, stat numbers — in sentence case, never all-caps. Everything smaller (buttons, counters, table heads, chips, toggles, legends) is Golos Text, as is all running text. `--mono` is a system stack, used only for file names and slugs.
+- **Nothing may cross text.** Scanlines belong on real screenshots only: a housing whose tube is an empty placeholder drops them via `:has(.shot-empty)`, and the placeholder has no inner grid.
+- **Motion budget is spent.** One page-load moment (`tube-on` on `.shot-big`), one blinking cursor (home title), press-in on buttons. Do not add hover lifts or entrance animations; everything is already switched off under `prefers-reduced-motion`.
+
+Fonts are self-hosted in `public/` (`handjet-*.woff2`, `golos-*.woff2`, both SIL OFL, Cyrillic + Latin subsets) because the CSP only allows `font-src 'self'`. `layout.ts#asset()` appends the file's mtime to stylesheet and script URLs — `/static/` is cached for an hour, and without that a design change reaches visitors late.
+
 ## Data and conventions
 
 - `data/` (SQLite db, `files/`, `screenshots/`, `session-secret`) and `config.json` are gitignored. Backup = those three plus the db.
 - All user-facing strings and UI copy are Russian; code comments and identifiers are English. `slugify()` transliterates Cyrillic.
 - Admin save (`POST /admin/save`) answers JSON when `Accept: application/json`, HTML otherwise — `admin.js` uses the JSON path, a JS-less browser gets the form path. Keep both working.
 - Public URLs: `/` (families), `/catalog`, `/<family>`, `/<family>/<model>`, `/p/<slug>`, `/dl/<slug>`, `/run/<slug>/<emulatorId>`. The family and model pages are the catalog with a fixed filter, so all four share `catalogBody()`.
+- "Author wanted" is a per-program flag; *what to do about it* is per-family text (`families.wanted_note`, Markdown). `parts.ts#wantedBadge()` is the single renderer for the tile, the table row and the program page: with a note it underlines the label, appends the "i" mark and reveals the rendered note on hover or keyboard focus, CSS only; with an empty note it degrades to the plain lamp. Its wrappers are `<div>`s on purpose — the note renders to `<p>`/`<ul>`, and a block element under a `<p>` ancestor makes the HTML parser close that ancestor early, so never put the badge back inside a `<p>`.
 - A program always belongs to exactly one family (`ON DELETE RESTRICT`) and to any number of models of *that* family — `/admin/save` drops model ids from other families rather than trusting the form.
 - Deployment targets systemd (`deploy/retro-catalog.service`, hardened with `ProtectSystem=strict` + `ReadWritePaths=…/data`) behind Caddy or nginx (`deploy/`).

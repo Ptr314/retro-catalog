@@ -81,3 +81,17 @@ export function viewToggle(current: 'tiles' | 'table', href: (mode: 'tiles' | 't
       : `<a class="view-option" href="${escapeHtml(href(mode))}">${label}</a>`;
   return `<div class="view-toggle" role="group" aria-label="Вид">${item('tiles', '▦ Плитка')}${item('table', '☰ Таблица')}</div>`;
 }
+
+/**
+ * The "author wanted" line. When the family has a note, the label is underlined, ends
+ * with an "i" mark and reveals the rendered note on hover or keyboard focus — CSS only.
+ * The wrappers are <div>s on purpose: the note renders to <p>/<ul>, and a block element
+ * inside a <p> or <span> ancestor would make the HTML parser close that ancestor early.
+ */
+export function wantedBadge(label: string, note: string): string {
+  if (!note.trim()) return `<div class="wanted"><span class="badge wanted">${escapeHtml(label)}</span></div>`;
+  return `<div class="wanted wanted-info" tabindex="0">
+  <span class="badge wanted"><span class="wanted-label">${escapeHtml(label)}</span><span class="info-mark" aria-hidden="true">i</span></span>
+  <div class="wanted-pop md-body" role="tooltip">${renderMarkdown(note)}</div>
+</div>`;
+}

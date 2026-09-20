@@ -15,6 +15,8 @@ export type Family = {
   image: string;
   /** Markdown source. */
   description: string;
+  /** Markdown: how to help find an author. Shown on "author wanted" programs of this family. */
+  wanted_note: string;
   sort_order: number;
   created_at: string;
   updated_at: string;
@@ -81,6 +83,7 @@ export type Program = {
 export type ProgramRow = Program & {
   family_slug: string;
   family_name: string;
+  family_wanted_note: string;
   category_name: string | null;
 };
 
@@ -253,6 +256,9 @@ const migrations: string[] = [
      created_at    TEXT NOT NULL,
      updated_at    TEXT NOT NULL
    );`,
+
+  // Per-family note shown next to "author wanted" programs: whom to write to, what is known.
+  `ALTER TABLE families ADD COLUMN wanted_note TEXT NOT NULL DEFAULT '';`,
 ];
 
 /** Runs fn inside BEGIN/COMMIT, rolling back on any throw. Must not be nested. */
@@ -428,7 +434,8 @@ const SORTS: Record<string, string> = {
   popular: 'p.downloads + p.runs DESC, p.title ASC',
 };
 
-const PROGRAM_SELECT = `SELECT p.*, f.slug AS family_slug, f.name AS family_name, c.name AS category_name
+const PROGRAM_SELECT = `SELECT p.*, f.slug AS family_slug, f.name AS family_name,
+         f.wanted_note AS family_wanted_note, c.name AS category_name
   FROM programs p
   JOIN families f ON f.id = p.family_id
   LEFT JOIN categories c ON c.id = p.category_id`;

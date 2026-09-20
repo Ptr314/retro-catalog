@@ -77,7 +77,7 @@ route('GET', '/catalog', (ctx) => {
     description: config.siteTagline,
     family: null,
     model: null,
-    header: '<nav class="crumbs"><a href="/">все семейства</a></nav>',
+    header: '<nav class="crumbs"><a href="/">все семейства</a></nav><h1>Все программы</h1>',
   });
 });
 
@@ -745,7 +745,13 @@ async function dispatch(req: IncomingMessage, res: ServerResponse): Promise<void
     }
     // Defence in depth against cross-site form posts (SameSite=Lax already covers most of it).
     if ((method === 'POST' || method === 'PUT') && !sameOrigin(req)) {
-      return json(res, 403, { error: 'Запрос с чужого origin' });
+      const from = String(req.headers.origin || req.headers.referer || 'неизвестного адреса');
+      console.warn(`403 origin: ${method} ${path} from ${from}, host ${req.headers.host ?? '-'}`);
+      // A plain form submit deserves a page, not a line of JSON.
+      if ((req.headers.accept ?? '').includes('text/html')) {
+        return html(res, 403, errorPage(403, `Запрос пришёл с ${from}, а сайт открыт по адресу ${req.headers.host ?? config.siteUrl}. Откройте админку по одному адресу и повторите.`));
+      }
+      return json(res, 403, { error: `Запрос с чужого origin: ${from}` });
     }
 
     const params: Record<string, string> = {};

@@ -146,10 +146,19 @@
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
         body: new URLSearchParams({ text: text }),
       })
-        .then(function (res) { return res.json(); })
+        .then(function (res) {
+          return res.json().then(function (body) {
+            // An error must not masquerade as an empty description.
+            if (!res.ok) throw new Error(body.error || 'ошибка ' + res.status);
+            return body;
+          });
+        })
         // The server produced this HTML with the same renderer the public page uses.
         .then(function (body) { preview.innerHTML = body.html || '<p class="muted">Пусто.</p>'; })
-        .catch(function () { preview.textContent = 'предпросмотр недоступен'; });
+        .catch(function (err) {
+          lastText = null; // let the next attempt retry instead of trusting the cache
+          preview.textContent = 'Предпросмотр недоступен: ' + err.message;
+        });
     }
 
     tabs.forEach(function (tab) {

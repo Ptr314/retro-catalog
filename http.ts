@@ -19,6 +19,7 @@ const MIME: Record<string, string> = {
   '.gif': 'image/gif',
   '.webp': 'image/webp',
   '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
 };
 
 export function escapeHtml(value: unknown): string {
@@ -39,7 +40,7 @@ export function html(res: ServerResponse, status: number, body: string): void {
     // 'none' and the browser would silently block every fetch/XHR the admin makes.
     'Content-Security-Policy':
       "default-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; " +
-      "connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+      "connect-src 'self'; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'same-origin',
   });

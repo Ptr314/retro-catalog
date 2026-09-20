@@ -5,7 +5,7 @@
 import type { EmulatorFile, Facets, Family, Model, ProgramRow } from '../db.ts';
 import { escapeHtml, formatBytes } from '../http.ts';
 import { layout } from './layout.ts';
-import { imageTag, mdDetails, pager, plural, viewToggle } from './parts.ts';
+import { imageTag, mdDetails, pager, plural, viewToggle, wantedBadge } from './parts.ts';
 
 export type ListQuery = {
   q: string;
@@ -108,7 +108,7 @@ function tile(p: ProgramRow, slots: EmulatorFile[]): string {
     <h3><a href="/p/${escapeHtml(p.slug)}">${escapeHtml(p.title)}</a></h3>
     <p class="card-meta">${escapeHtml(meta)}</p>
     ${p.author ? `<p class="card-author">${escapeHtml(p.author)}</p>` : ''}
-    ${p.author_wanted ? '<p><span class="badge wanted">разыскивается автор</span></p>' : ''}
+    ${p.author_wanted ? wantedBadge('разыскивается автор', p.family_wanted_note) : ''}
     <p class="card-actions">${actions(p, slots, true)}</p>
   </div>
 </article>`;
@@ -121,7 +121,7 @@ function tableRow(p: ProgramRow, slots: EmulatorFile[]): string {
   <td>
     <a class="row-title" href="/p/${escapeHtml(p.slug)}">${escapeHtml(p.title)}</a>
     <p class="card-meta">${escapeHtml(meta)}</p>
-    ${p.author_wanted ? '<span class="badge wanted">разыскивается автор</span>' : ''}
+    ${p.author_wanted ? wantedBadge('разыскивается автор', p.family_wanted_note) : ''}
   </td>
   <td>${p.year ?? ''}</td>
   <td>${escapeHtml(p.author)}</td>

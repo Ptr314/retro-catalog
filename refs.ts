@@ -84,6 +84,12 @@ const families: RefSpec = {
     },
     { name: 'image', label: 'Картинка', type: 'image' },
     { name: 'description', label: 'Описание', type: 'markdown' },
+    {
+      name: 'wanted_note',
+      label: 'Розыск автора',
+      type: 'markdown',
+      hint: 'Показывается во всплывающем окне у программ этого семейства с флагом «Разыскивается автор»: куда писать, что уже известно.',
+    },
   ],
   validate(form, id) {
     if (!str(form, 'name')) return 'Название обязательно.';
@@ -98,6 +104,7 @@ const families: RefSpec = {
       name,
       slug: uniqueRefSlug('families', str(form, 'slug', 80), name, 0, id),
       description: str(form, 'description', 20000),
+      wanted_note: str(form, 'wanted_note', 5000),
     };
   },
   beforeDelete(id) {

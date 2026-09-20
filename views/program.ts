@@ -3,7 +3,7 @@ import type { EmulatorFile, Family, Model, ProgramRow } from '../db.ts';
 import { escapeHtml, formatBytes } from '../http.ts';
 import { markdownExcerpt } from '../markdown.ts';
 import { layout } from './layout.ts';
-import { imageTag, mdBlock } from './parts.ts';
+import { imageTag, mdBlock, wantedBadge } from './parts.ts';
 
 export function programPage(
   p: ProgramRow,
@@ -25,7 +25,7 @@ export function programPage(
     ['Модели', modelLinks],
     ['Категория', escapeHtml(p.category_name ?? '')],
     ['Год', p.year ? String(p.year) : ''],
-    ['Автор', p.author_wanted ? '<span class="badge wanted">разыскивается</span>' : escapeHtml(p.author)],
+    ['Автор', p.author_wanted ? wantedBadge('разыскивается', p.family_wanted_note) : escapeHtml(p.author)],
     ['Размер', escapeHtml(formatBytes(p.file_size))],
   ].filter((row) => row[1] !== '') as [string, string][];
 
