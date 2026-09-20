@@ -110,6 +110,78 @@
     });
   });
 
+  // ---------------------------- emulator slots: upload as soon as a file is picked
+
+  document.querySelectorAll('[data-upload-emu]').forEach(function (input) {
+    var form = input.closest('form[data-id]');
+    if (!form) return;
+    input.addEventListener('change', function () {
+      if (!input.files || !input.files[0]) return;
+      var file = input.files[0];
+      var url = '/admin/upload/program/' + form.getAttribute('data-id') + '/emu/' +
+        input.getAttribute('data-upload-emu') + '?name=' + encodeURIComponent(file.name);
+      say('Файл: 0%');
+      putFile(url, file, function (percent) { say('Файл: ' + percent + '%'); })
+        .then(function () { window.location.reload(); })
+        .catch(function (err) { say(err.message, true); });
+    });
+  });
+
+  // ------------------------------------------------- markdown editor: text / preview
+
+  document.querySelectorAll('[data-md]').forEach(function (editorBox) {
+    var source = editorBox.querySelector('[data-md-source]');
+    var preview = editorBox.querySelector('[data-md-preview]');
+    var tabs = editorBox.querySelectorAll('[data-md-tab]');
+    if (!source || !preview) return;
+    var timer = null;
+    var lastText = null;
+
+    function render() {
+      var text = source.value;
+      if (text === lastText) return;
+      lastText = text;
+      fetch('/admin/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+        body: new URLSearchParams({ text: text }),
+      })
+        .then(function (res) { return res.json(); })
+        // The server produced this HTML with the same renderer the public page uses.
+        .then(function (body) { preview.innerHTML = body.html || '<p class="muted">Пусто.</p>'; })
+        .catch(function () { preview.textContent = 'предпросмотр недоступен'; });
+    }
+
+    tabs.forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        var wantPreview = tab.getAttribute('data-md-tab') === 'preview';
+        tabs.forEach(function (other) { other.classList.toggle('active', other === tab); });
+        source.hidden = wantPreview;
+        preview.hidden = !wantPreview;
+        if (wantPreview) render();
+      });
+    });
+
+    source.addEventListener('input', function () {
+      if (preview.hidden) return;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(render, 300);
+    });
+  });
+
+  // ------------------------------------------------------------ copy an external URL
+
+  document.querySelectorAll('[data-copy]').forEach(function (button) {
+    button.addEventListener('click', function () {
+      var field = button.parentNode.querySelector('[data-copy-source]');
+      if (!field) return;
+      field.select();
+      var done = function () { button.textContent = 'скопировано'; };
+      if (navigator.clipboard) navigator.clipboard.writeText(field.value).then(done, function () {});
+      else done();
+    });
+  });
+
   // ------------------------------------------------------------------- clear buttons
 
   document.querySelectorAll('[data-clear]').forEach(function (button) {

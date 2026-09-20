@@ -1,8 +1,8 @@
 import { config } from '../config.ts';
-import type { Category, Emulator, Family, Model, ProgramRow, Stats, User } from '../db.ts';
+import type { Category, Emulator, EmulatorFile, Family, Model, ProgramRow, Stats, User } from '../db.ts';
 import { escapeHtml, formatBytes } from '../http.ts';
 import { layout } from './layout.ts';
-import { alerts, imageUrl, pager, plural } from './parts.ts';
+import { alerts, imageUrl, mdEditor, pager, plural } from './parts.ts';
 
 export const adminName = (user: User): string => user.display_name || user.username;
 
@@ -105,8 +105,31 @@ export type EditData = {
   categories: Category[];
   models: Model[];
   emulators: Emulator[];
+  emulatorFiles: EmulatorFile[];
   selectedModels: number[];
 };
+
+/** The address the emulator (or anyone else) fetches the file by. */
+function externalUrl(url: string): string {
+  return `<p class="external-url"><input class="mono" type="text" value="${escapeHtml(url)}" readonly data-copy-source>
+    <button class="linkish" type="button" data-copy>копировать</button></p>`;
+}
+
+function emulatorSlot(p: ProgramRow, emu: Emulator, files: EmulatorFile[]): string {
+  const slot = files.find((f) => f.emulator_id === emu.id);
+  return `<div class="upload emu-slot">
+  <p class="upload-label">${escapeHtml(emu.name)}</p>
+  ${slot
+    ? `<p class="mono current-file">${escapeHtml(slot.file_name)} <span class="muted">${escapeHtml(
+        formatBytes(slot.file_size),
+      )}</span></p>
+       ${externalUrl(`${config.siteUrl}/files/${slot.file_name}`)}
+       <p class="muted">запусков: ${slot.runs}</p>`
+    : '<p class="muted">файл не загружен</p>'}
+  <input type="file" data-upload-emu="${emu.id}">
+  ${slot ? `<button class="linkish danger" type="button" data-clear="program/${p.id}/emu/${emu.id}">удалить файл</button>` : ''}
+</div>`;
+}
 
 export function editPage(user: User, p: ProgramRow | null, data: EditData, error = ''): string {
   const v = (value: string | null | undefined): string => escapeHtml(value ?? '');
@@ -181,7 +204,7 @@ export function editPage(user: User, p: ProgramRow | null, data: EditData, error
         <label>Автор<input type="text" name="author" value="${v(p?.author)}" maxlength="120"></label>
       </div>
       <label class="check"><input type="checkbox" name="author_wanted" value="1"${p?.author_wanted ? ' checked' : ''}> Разыскивается автор</label>
-      <label>Описание<textarea name="description" rows="10">${v(p?.description)}</textarea></label>
+      ${mdEditor('description', 'Описание', p?.description ?? '')}
       <label class="check"><input type="checkbox" name="published" value="1"${!p || p.published ? ' checked' : ''}> Показывать в каталоге</label>
     </section>
 
@@ -210,7 +233,17 @@ export function editPage(user: User, p: ProgramRow | null, data: EditData, error
         <input type="file" name="programFile" data-upload="file">
         <small>Образ диска, лента, архив — до ${Math.round(config.maxFileBytes / 1024 / 1024)} МБ.</small>
         ${p?.file_name ? `<button class="linkish danger" type="button" data-clear="program/${p.id}/file">удалить файл</button>` : ''}
+        ${p?.file_name ? externalUrl(`${config.siteUrl}/files/${p.file_name}`) : ''}
       </div>
+    </section>
+
+    <section class="panel">
+      <h2>Файлы для эмуляторов</h2>
+      ${data.emulators.length === 0
+        ? '<p class="muted">Эмуляторов пока нет. <a href="/admin/ref/emulators/new">Добавьте эмулятор</a>.</p>'
+        : isNew
+          ? '<p class="muted">Сохраните программу, чтобы загрузить файлы.</p>'
+          : data.emulators.map((emu) => emulatorSlot(p!, emu, data.emulatorFiles)).join('')}
     </section>
   </div>
 

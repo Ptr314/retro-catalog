@@ -1,8 +1,9 @@
 import { config } from '../config.ts';
-import type { Facets, Family, Model, ProgramRow } from '../db.ts';
+import type { EmulatorFile, Facets, Family, Model, ProgramRow } from '../db.ts';
 import { escapeHtml, formatBytes } from '../http.ts';
 import { layout } from './layout.ts';
-import { imageTag, pager, plural } from './parts.ts';
+import { markdownExcerpt } from '../markdown.ts';
+import { imageTag, mdBlock, pager, plural } from './parts.ts';
 
 export type ListQuery = {
   q: string;
@@ -100,7 +101,11 @@ ${pager(page, pages, (n) => queryString(q, { page: n }))}`,
   );
 }
 
-export function programPage(p: ProgramRow, models: Model[], links: { download: string }): string {
+export function programPage(
+  p: ProgramRow,
+  models: Model[],
+  links: { download: string; emulators: EmulatorFile[] },
+): string {
   const rows: [string, string][] = [
     ['Семейство', p.family_name],
     ['Модели', models.map((m) => m.name).join(', ')],
@@ -110,12 +115,20 @@ export function programPage(p: ProgramRow, models: Model[], links: { download: s
     ['Размер', formatBytes(p.file_size)],
   ].filter((row) => row[1] !== '') as [string, string][];
 
-  const actions = links.download
-    ? `<a class="button" href="${escapeHtml(links.download)}">↓ Скачать</a>`
-    : '';
+  const actions = [
+    ...links.emulators.map(
+      (slot) =>
+        `<a class="button primary" href="/run/${escapeHtml(p.slug)}/${slot.emulator_id}" target="_blank" rel="noopener">▶ Запустить в ${escapeHtml(
+          slot.emulator_name,
+        )}</a>`,
+    ),
+    links.download ? `<a class="button" href="${escapeHtml(links.download)}">↓ Скачать</a>` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
 
   return layout(
-    { title: p.title, description: p.description.slice(0, 200) },
+    { title: p.title, description: markdownExcerpt(p.description, 200) },
     `<article class="program">
   <div class="program-shot">${imageTag(p.screenshot, `Скриншот: ${p.title}`, 'shot-big', p.family_name)}</div>
   <div class="program-info">
@@ -124,7 +137,7 @@ export function programPage(p: ProgramRow, models: Model[], links: { download: s
       ${rows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')}
     </dl>
     <div class="actions">${actions || '<p class="empty">Файл пока не добавлен.</p>'}</div>
-    ${p.description ? `<div class="description">${paragraphs(p.description)}</div>` : ''}
+    ${mdBlock(p.description, 'description md-body')}
     <p class="counters">скачиваний: ${p.downloads} · запусков: ${p.runs}</p>
   </div>
 </article>
@@ -132,10 +145,3 @@ export function programPage(p: ProgramRow, models: Model[], links: { download: s
   );
 }
 
-/** Interim: descriptions are Markdown sources, rendered properly from stage 2 on. */
-function paragraphs(textValue: string): string {
-  return textValue
-    .split(/\n{2,}/)
-    .map((block) => `<p>${escapeHtml(block).replaceAll('\n', '<br>')}</p>`)
-    .join('');
-}

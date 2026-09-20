@@ -18,6 +18,7 @@ import {
   authenticate, currentUser, endSession, hashPassword, loginBlockedFor, noteLoginFailure,
   noteLoginSuccess, sameOrigin, startSession, verifyPassword,
 } from './auth.ts';
+import { renderMarkdown } from './markdown.ts';
 import { refSpec } from './refs.ts';
 import { errorPage } from './views/layout.ts';
 import { listPage, programPage } from './views/catalog.ts';
@@ -79,6 +80,7 @@ route('GET', '/p/:slug', (ctx) => {
   if (!program || (!program.published && !ctx.user)) return notFound(ctx);
   html(ctx.res, 200, programPage(program, db.modelsForProgram(program.id), {
     download: program.file_name ? `/dl/${program.slug}` : '',
+    emulators: db.emulatorFilesFor([program.id]).get(program.id) ?? [],
   }));
 });
 
@@ -93,6 +95,16 @@ route('GET', '/dl/:slug', async (ctx) => {
     cors: true,
     cacheSeconds: 86400,
   });
+});
+
+route('GET', '/run/:slug/:emu', (ctx) => {
+  const program = db.getProgramBySlug(ctx.params.slug);
+  if (!program || (!program.published && !ctx.user)) return notFound(ctx);
+  const slot = db.getEmulatorFile(program.id, Number(ctx.params.emu));
+  if (!slot) return notFound(ctx);
+  db.bumpRuns(program.id, slot.emulator_id);
+  // 302, never 301: a cached permanent redirect would freeze the counter.
+  redirect(ctx.res, emulatorLaunchUrl(slot.url_template, `${config.siteUrl}/files/${slot.file_name}`), 302);
 });
 
 route('GET', '/static/:name', async (ctx) => {
@@ -238,7 +250,50 @@ route('POST', '/admin/delete/:id', async (ctx) => {
   redirect(ctx.res, '/admin');
 }, true);
 
+/** The editor's preview tab renders through the same function the public page uses. */
+route('POST', '/admin/preview', async (ctx) => {
+  const form = await readForm(ctx.req, 128 * 1024);
+  json(ctx.res, 200, { html: renderMarkdown(form.get('text') ?? '') });
+}, true);
+
 // ------------------------------------------------------------ admin: uploads
+
+/** One file per emulator per program; the emulator downloads it by its own URL. */
+route('PUT', '/admin/upload/program/:id/emu/:emu', async (ctx) => {
+  const id = Number(ctx.params.id);
+  const emulatorId = Number(ctx.params.emu);
+  const program = db.getProgramById(id);
+  const emulator = db.getRef('emulators', emulatorId);
+  if (!program || !emulator) return json(ctx.res, 404, { error: 'Не найдено' });
+
+  const original = ctx.url.searchParams.get('name') ?? 'file.bin';
+  const name = storedFileName(`${id}-e${emulatorId}`, original);
+  const body = await readBody(ctx.req, config.maxFileBytes);
+  if (body.length === 0) return json(ctx.res, 400, { error: 'Пустой файл' });
+
+  const previous = db.getEmulatorFile(id, emulatorId);
+  await writeFile(join(filesDir, name), body);
+  if (previous && previous.file_name !== name) {
+    await unlink(join(filesDir, previous.file_name)).catch(() => {});
+  }
+  db.setEmulatorFile(id, emulatorId, name, body.length);
+  json(ctx.res, 200, {
+    name,
+    size: body.length,
+    human: formatBytes(body.length),
+    url: `${config.siteUrl}/files/${name}`,
+  });
+}, true);
+
+route('POST', '/admin/clear/program/:id/emu/:emu', async (ctx) => {
+  const id = Number(ctx.params.id);
+  const emulatorId = Number(ctx.params.emu);
+  const slot = db.getEmulatorFile(id, emulatorId);
+  if (!slot) return json(ctx.res, 404, { error: 'Не найдено' });
+  await unlink(join(filesDir, slot.file_name)).catch(() => {});
+  db.clearEmulatorFile(id, emulatorId);
+  json(ctx.res, 200, { ok: true });
+}, true);
 
 /** entity/kind pairs the uploader accepts. The body is the raw file. */
 route('PUT', '/admin/upload/:entity/:id/:kind', async (ctx) => {
@@ -486,6 +541,7 @@ function editData(program: ProgramRow | null) {
     categories: db.listCategories(),
     models: db.listModels(),
     emulators: db.listEmulators(),
+    emulatorFiles: program ? (db.emulatorFilesFor([program.id]).get(program.id) ?? []) : [],
     selectedModels: program ? db.modelIdsForProgram(program.id) : [],
   };
 }
@@ -528,6 +584,11 @@ async function saveImage(ctx: Ctx, prefix: string, previous: string): Promise<st
   await writeFile(join(screenshotsDir, name), body);
   if (previous && previous !== name) await unlink(join(screenshotsDir, previous)).catch(() => {});
   return name;
+}
+
+/** The emulator downloads the package itself, so the template gets an absolute URL. */
+function emulatorLaunchUrl(template: string, fileUrl: string): string {
+  return template.replaceAll('{url}', encodeURIComponent(fileUrl));
 }
 
 function uniqueSlug(candidate: string, exceptId: number): string {

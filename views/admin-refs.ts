@@ -4,7 +4,7 @@ import type { RefField, RefSpec } from '../refs.ts';
 import type { User } from '../db.ts';
 import { escapeHtml } from '../http.ts';
 import { layout } from './layout.ts';
-import { alerts, imageUrl, plural } from './parts.ts';
+import { alerts, imageUrl, mdEditor, plural } from './parts.ts';
 import { nav } from './admin.ts';
 
 const str = (row: RefRow | null, name: string): string => escapeHtml(row ? (row[name] ?? '') : '');
@@ -111,9 +111,7 @@ function fieldInput(
       </label>${hint}`;
     }
     case 'markdown':
-      return `<label>${escapeHtml(field.label)}
-        <textarea ${common} rows="10">${str(row, field.name)}</textarea>
-      </label>${hint}`;
+      return mdEditor(field.name, field.label, row ? String(row[field.name] ?? '') : '');
     case 'image': {
       const image = row ? String(row.image ?? '') : '';
       return `<div class="upload">
