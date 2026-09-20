@@ -1,5 +1,5 @@
 # Caddy gets a certificate automatically and proxies to the Node process.
-retro.example.com {
+catalog.emuverse.ru {
 	encode gzip
 
 	# Program files and screenshots are served straight from disk, bypassing Node.

@@ -31,7 +31,7 @@ npm start                            # http://127.0.0.1:8080
 
 | Ключ | Зачем |
 |---|---|
-| `siteUrl` | Публичный адрес. Из него строятся **абсолютные** ссылки на файлы для эмуляторов и проверяется Origin при POST. Должен совпадать с реальным адресом сайта. |
+| `siteUrl` | Публичный адрес. Из него строятся **абсолютные** ссылки на файлы для эмуляторов, и по нему cookie сессии получает флаг `Secure`. Должен совпадать с реальным адресом сайта. |
 | `corsOrigins` | Кому разрешено скачивать `/files/` и `/screenshots/` кросс-доменно. Если эмулятор на другом домене — укажите его здесь (или оставьте `["*"]`). |
 | `maxScreenshotBytes` / `maxFileBytes` | Пределы загрузки. |
 | `sessionTtlHours` | Срок жизни сессии админки. |
@@ -122,22 +122,11 @@ npm run import -- catalog.json
 должны существовать заранее; строка с неизвестной ссылкой пропускается с сообщением.
 Совпадение по `slug`: существующая запись обновляется, новая создаётся.
 
-## Деплой на VPS
+## Деплой
 
-```bash
-sudo useradd -r -s /usr/sbin/nologin retro
-sudo mkdir -p /opt/retro-catalog && sudo chown retro:retro /opt/retro-catalog
-# скопировать исходники, создать config.json
-sudo -u retro node --disable-warning=ExperimentalWarning /opt/retro-catalog/tools/user.ts add admin
-sudo cp deploy/retro-catalog.service /etc/systemd/system/
-sudo systemctl enable --now retro-catalog
-```
-
-TLS и отдача больших файлов — `deploy/Caddyfile` (проще) или `deploy/nginx.conf`.
-Если файлы отдаёт nginx/Caddy напрямую, Node остаётся только счётчик на `/dl/:slug` и `/run/:slug/:эмулятор`.
-
-Бэкап — три файла: `data/catalog.db`, каталоги `data/files` и `data/screenshots`.
-Горячая копия базы: `sqlite3 data/catalog.db ".backup backup.db"` (или просто остановить сервис на секунду).
+Пошаговая инструкция — в [DEPLOY.md](DEPLOY.md): Ubuntu 24.04, Node 24, Caddy, код из git, обновление и бэкап.
+Коротко: нужен HTTPS-домен (эмулятор скачивает файлы сам, по `http://` браузер это заблокирует),
+а всё состояние сайта — это `data/catalog.db`, `data/files` и `data/screenshots`.
 
 ## Что можно добавить позже
 
