@@ -94,13 +94,20 @@ export type ProgramInput = Omit<
   'id' | 'screenshot' | 'file_name' | 'file_size' | 'downloads' | 'runs' | 'created_at' | 'updated_at'
 >;
 
+/**
+ * What a program offers one emulator: an uploaded file, a ready-made launch address,
+ * or both — in which case the file wins (see `packageUrlFor` in server.ts).
+ */
 export type EmulatorFile = {
   program_id: number;
   emulator_id: number;
   emulator_name: string;
   url_template: string;
+  /** File in data/files, or empty. */
   file_name: string;
   file_size: number | null;
+  /** http(s) address handed to the emulator when no file is uploaded, or empty. */
+  file_url: string;
   runs: number;
 };
 
@@ -264,6 +271,11 @@ const migrations: string[] = [
 
   // Where the program came from: the author's page or the archive it was taken from.
   `ALTER TABLE programs ADD COLUMN source_url TEXT NOT NULL DEFAULT '';`,
+
+  // A slot may hold a ready-made launch address instead of an uploaded file, so a row
+  // here no longer implies a file: file_name and file_url are both optional, but a row
+  // with neither is deleted rather than kept.
+  `ALTER TABLE program_emulator_files ADD COLUMN file_url TEXT NOT NULL DEFAULT '';`,
 ];
 
 /** Runs fn inside BEGIN/COMMIT, rolling back on any throw. Must not be nested. */
@@ -610,6 +622,7 @@ export function emulatorFilesFor(programIds: number[]): Map<number, EmulatorFile
        FROM program_emulator_files pef
        JOIN emulators e ON e.id = pef.emulator_id
        WHERE pef.program_id IN (${programIds.map(() => '?').join(',')})
+         AND (pef.file_name <> '' OR pef.file_url <> '')
        ORDER BY e.sort_order, e.id`,
     )
     .all(...programIds) as unknown as EmulatorFile[];
@@ -643,16 +656,58 @@ export function setEmulatorFile(programId: number, emulatorId: number, name: str
   ).run(programId, emulatorId, name, size, now());
 }
 
+/** The launch address used when nothing is uploaded. Empty removes it. */
+export function setEmulatorUrl(programId: number, emulatorId: number, url: string): void {
+  transaction(() => {
+    if (url) {
+      db.prepare(
+        `INSERT INTO program_emulator_files (program_id, emulator_id, file_name, file_size, file_url, updated_at)
+         VALUES (?,?,'',NULL,?,?)
+         ON CONFLICT (program_id, emulator_id)
+         DO UPDATE SET file_url = excluded.file_url, updated_at = excluded.updated_at`,
+      ).run(programId, emulatorId, url, now());
+      return;
+    }
+    db.prepare(
+      `UPDATE program_emulator_files SET file_url = '', updated_at = ?
+       WHERE program_id = ? AND emulator_id = ?`,
+    ).run(now(), programId, emulatorId);
+    dropEmptySlot(programId, emulatorId);
+  });
+}
+
 export function clearEmulatorFile(programId: number, emulatorId: number): void {
-  db.prepare('DELETE FROM program_emulator_files WHERE program_id = ? AND emulator_id = ?').run(programId, emulatorId);
+  transaction(() => {
+    db.prepare(
+      `UPDATE program_emulator_files SET file_name = '', file_size = NULL, updated_at = ?
+       WHERE program_id = ? AND emulator_id = ?`,
+    ).run(now(), programId, emulatorId);
+    // The slot survives if it still carries a launch address.
+    dropEmptySlot(programId, emulatorId);
+  });
+}
+
+function dropEmptySlot(programId: number, emulatorId: number): void {
+  db.prepare(
+    `DELETE FROM program_emulator_files
+      WHERE program_id = ? AND emulator_id = ? AND file_name = '' AND file_url = ''`,
+  ).run(programId, emulatorId);
+}
+
+/** Programs this emulator can launch, by file or by address. */
+export function countProgramsWithEmulator(emulatorId: number): number {
+  const row = db
+    .prepare('SELECT COUNT(*) AS n FROM program_emulator_files WHERE emulator_id = ?')
+    .get(emulatorId) as { n: number };
+  return Number(row.n);
 }
 
 /** File names an emulator owns across all programs — unlinked before the row disappears. */
 export function emulatorFileNames(emulatorId: number): string[] {
   return (
-    db.prepare('SELECT file_name FROM program_emulator_files WHERE emulator_id = ?').all(emulatorId) as unknown as {
-      file_name: string;
-    }[]
+    db
+      .prepare("SELECT file_name FROM program_emulator_files WHERE emulator_id = ? AND file_name <> ''")
+      .all(emulatorId) as unknown as { file_name: string }[]
   ).map((r) => String(r.file_name));
 }
 

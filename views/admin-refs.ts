@@ -234,7 +234,12 @@ function deleteConfirm(spec: RefSpec, row: RefRow, programCount: number): string
     return `Удалить «${name}»? Модель указана у ${programCount} ${plural(programCount, 'программы', 'программ', 'программ')} — связь будет снята.`;
   }
   if (spec.table === 'emulators' && programCount > 0) {
-    return `Удалить «${name}»? Загруженные для него файлы (${programCount}) будут удалены.`;
+    return `Удалить «${name}»? Кнопка запуска исчезнет у ${programCount} ${plural(
+      programCount,
+      'программы',
+      'программ',
+      'программ',
+    )}, загруженные для него файлы будут удалены.`;
   }
   if (spec.table === 'families') {
     return `Удалить «${name}» вместе с его моделями?`;

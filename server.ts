@@ -115,9 +115,11 @@ route('GET', '/run/:slug/:emu', (ctx) => {
   if (!program || (!program.published && !ctx.user)) return notFound(ctx);
   const slot = db.getEmulatorFile(program.id, Number(ctx.params.emu));
   if (!slot) return notFound(ctx);
+  const launchUrl = launchUrlFor(slot);
+  if (!launchUrl) return notFound(ctx);
   if (!ctx.user) db.bumpRuns(program.id, slot.emulator_id);
   // 302, never 301: a cached permanent redirect would freeze the counter.
-  redirect(ctx.res, emulatorLaunchUrl(slot.url_template, `${config.siteUrl}/files/${slot.file_name}`), 302);
+  redirect(ctx.res, launchUrl, 302);
 });
 
 route('GET', '/static/:name', async (ctx) => {
@@ -223,6 +225,16 @@ route('POST', '/admin/save', async (ctx) => {
   const familyId = Number(form.get('family_id')) || 0;
   if (!familyId || !db.getRef('families', familyId)) return fail('Выберите семейство.');
 
+  // One launch address per emulator; the slot's uploaded file, if any, still wins.
+  const emulatorUrls = new Map<number, string>();
+  for (const emulator of db.listEmulators()) {
+    const url = httpUrl(form.get(`emu_url_${emulator.id}`));
+    if (url === null) {
+      return fail(`Ссылка на запуск в «${emulator.name}» должна начинаться с http:// или https://.`);
+    }
+    emulatorUrls.set(emulator.id, url);
+  }
+
   const categoryId = Number(form.get('category_id')) || 0;
   // Only models of the chosen family may be attached.
   const familyModels = new Set(db.listModels(familyId).map((m) => m.id));
@@ -250,6 +262,7 @@ route('POST', '/admin/save', async (ctx) => {
   } else {
     savedId = db.createProgram(input, modelIds);
   }
+  for (const [emulatorId, url] of emulatorUrls) db.setEmulatorUrl(savedId, emulatorId, url);
 
   if (wantsJson) return json(ctx.res, 200, { id: savedId, slug: input.slug });
   redirect(ctx.res, `/admin/edit/${savedId}`);
@@ -655,7 +668,7 @@ function refCounts(table: RefTable, rows: db.RefRow[]): Map<number, number> {
     const id = Number(row.id);
     if (table === 'families') counts.set(id, db.countProgramsInFamily(id));
     else if (table === 'models') counts.set(id, db.countProgramsWithModel(id));
-    else if (table === 'emulators') counts.set(id, db.emulatorFileNames(id).length);
+    else if (table === 'emulators') counts.set(id, db.countProgramsWithEmulator(id));
     else counts.set(id, db.listPrograms({ categoryId: id, includeHidden: true, perPage: 1 }).total);
   }
   return counts;
@@ -666,7 +679,7 @@ function refEditExtras(table: RefTable, id: number): { childModels?: db.RefRow[]
     return { childModels: db.listRef('models', id) as unknown as db.RefRow[], programCount: db.countProgramsInFamily(id) };
   }
   if (table === 'models') return { programCount: db.countProgramsWithModel(id) };
-  if (table === 'emulators') return { programCount: db.emulatorFileNames(id).length };
+  if (table === 'emulators') return { programCount: db.countProgramsWithEmulator(id) };
   return {};
 }
 
@@ -701,6 +714,17 @@ function httpUrl(value: string | null): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Where «Запустить» goes. The two sources are not the same kind of thing: an uploaded
+ * file is a package, handed to the emulator through its {url} template, while a typed
+ * address is already a finished launch page and is opened exactly as written.
+ * An uploaded file wins; '' means the slot cannot launch anything.
+ */
+function launchUrlFor(slot: db.EmulatorFile): string {
+  if (slot.file_name) return emulatorLaunchUrl(slot.url_template, `${config.siteUrl}/files/${slot.file_name}`);
+  return slot.file_url;
 }
 
 /** The emulator downloads the package itself, so the template gets an absolute URL. */

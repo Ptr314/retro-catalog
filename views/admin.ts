@@ -115,19 +115,38 @@ function externalUrl(url: string): string {
     <button class="linkish" type="button" data-copy>копировать</button></p>`;
 }
 
-function emulatorSlot(p: ProgramRow, emu: Emulator, files: EmulatorFile[]): string {
+/**
+ * One emulator, two ways to launch: an uploaded file or a ready-made address.
+ * The file wins when both are filled in, so the slot says so out loud.
+ * `p` is null for a program that has not been saved yet — uploading needs an id,
+ * typing an address does not, so only the file control waits for the first save.
+ */
+function emulatorSlot(p: ProgramRow | null, emu: Emulator, files: EmulatorFile[]): string {
   const slot = files.find((f) => f.emulator_id === emu.id);
+  const file = slot?.file_name ?? '';
+  const url = slot?.file_url ?? '';
+
   return `<div class="upload emu-slot">
   <p class="upload-label">${escapeHtml(emu.name)}</p>
-  ${slot
-    ? `<p class="mono current-file">${escapeHtml(slot.file_name)} <span class="muted">${escapeHtml(
-        formatBytes(slot.file_size),
+  ${file
+    ? `<p class="mono current-file">${escapeHtml(file)} <span class="muted">${escapeHtml(
+        formatBytes(slot!.file_size),
       )}</span></p>
-       ${externalUrl(`${config.siteUrl}/files/${slot.file_name}`)}
-       <p class="muted">запусков: ${slot.runs}</p>`
+       ${externalUrl(`${config.siteUrl}/files/${file}`)}`
     : '<p class="muted">файл не загружен</p>'}
-  <input type="file" data-upload-emu="${emu.id}">
-  ${slot ? `<button class="linkish danger" type="button" data-clear="program/${p.id}/emu/${emu.id}">удалить файл</button>` : ''}
+  ${p
+    ? `<input type="file" data-upload-emu="${emu.id}">
+       ${file ? `<button class="linkish danger" type="button" data-clear="program/${p.id}/emu/${emu.id}">удалить файл</button>` : ''}`
+    : '<small>Файл можно загрузить после сохранения.</small>'}
+  <label>Готовая ссылка на запуск
+    <input type="url" name="emu_url_${emu.id}" value="${escapeHtml(url)}" maxlength="500" placeholder="https://…">
+  </label>
+  <small class="hint">${
+    file && url
+      ? 'Загружен файл — запуск идёт по нему через шаблон эмулятора. Ссылка сработает, если файл удалить.'
+      : 'Полный адрес страницы запуска: открывается как есть, шаблон эмулятора к нему не применяется.'
+  }</small>
+  ${slot ? `<p class="muted">запусков: ${slot.runs}</p>` : ''}
 </div>`;
 }
 
@@ -218,9 +237,7 @@ export function editPage(user: User, p: ProgramRow | null, data: EditData, error
       <h2>Файлы для эмуляторов</h2>
       ${data.emulators.length === 0
         ? '<p class="muted">Эмуляторов пока нет. <a href="/admin/ref/emulators/new">Добавьте эмулятор</a>.</p>'
-        : isNew
-          ? '<p class="muted">Сохраните программу, чтобы загрузить файлы.</p>'
-          : data.emulators.map((emu) => emulatorSlot(p!, emu, data.emulatorFiles)).join('')}
+        : data.emulators.map((emu) => emulatorSlot(p, emu, data.emulatorFiles)).join('')}
     </section>
 
     <section class="panel">
