@@ -56,6 +56,7 @@ export function refListPage(
 </section>
 ${alerts(error, notice)}
 ${spec.reorderable && rows.length > 1 ? '<p class="hint">Порядок строк — порядок показа на сайте. Перетащите строку или воспользуйтесь стрелками.</p>' : ''}
+<p class="save-status" data-status></p>
 <table class="admin-table"${spec.reorderable ? ` data-reorder="${spec.table}"` : ''}>
   <thead><tr>
     ${spec.reorderable ? '<th class="reorder-col"></th>' : ''}

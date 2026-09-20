@@ -32,7 +32,7 @@ ${opts.description ? `<meta name="description" content="${escapeHtml(opts.descri
       <small>${escapeHtml(config.siteTagline)}</small>
     </span>
   </a>
-  <nav class="site-nav">${opts.nav ?? ''}</nav>
+  <nav class="site-nav">${opts.nav ?? '<a href="/">семейства</a><a href="/catalog">все программы</a>'}</nav>
 </header>
 <main class="site-main">
 ${body}

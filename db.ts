@@ -341,6 +341,23 @@ export function listFamilies(): Family[] {
   return db.prepare('SELECT * FROM families ORDER BY sort_order, id').all() as unknown as Family[];
 }
 
+/** Families for the home page, with the counts the cards show. */
+export function familyCards(): (Family & { programs: number; models: number })[] {
+  return db
+    .prepare(
+      `SELECT f.*,
+              (SELECT COUNT(*) FROM programs p WHERE p.family_id = f.id AND p.published = 1) AS programs,
+              (SELECT COUNT(*) FROM models m WHERE m.family_id = f.id) AS models
+         FROM families f
+        ORDER BY f.sort_order, f.id`,
+    )
+    .all() as unknown as (Family & { programs: number; models: number })[];
+}
+
+export function getFamilyById(id: number): Family | null {
+  return (db.prepare('SELECT * FROM families WHERE id = ?').get(id) as unknown as Family) ?? null;
+}
+
 export function getFamilyBySlug(slug: string): Family | null {
   return (db.prepare('SELECT * FROM families WHERE slug = ?').get(slug) as unknown as Family) ?? null;
 }

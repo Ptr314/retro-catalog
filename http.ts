@@ -35,8 +35,11 @@ export function html(res: ServerResponse, status: number, body: string): void {
   res.writeHead(status, {
     'Content-Type': 'text/html; charset=utf-8',
     'Content-Length': buf.length,
+    // connect-src must be explicit: with default-src 'none' it would otherwise inherit
+    // 'none' and the browser would silently block every fetch/XHR the admin makes.
     'Content-Security-Policy':
-      "default-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+      "default-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; " +
+      "connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'same-origin',
   });

@@ -258,3 +258,45 @@ button:hover, .button:hover { border-color: var(--accent-dim); text-decoration: 
 .emu-slot:first-of-type { border-top: none; padding-top: 0; }
 .external-url { display: flex; gap: .4rem; align-items: center; margin: .3rem 0; }
 .external-url input { flex: 1; font-size: .8rem; padding: .25rem .4rem; }
+
+/* --- home: family cards and rows -------------------------------------------- */
+.home-title { margin: 0 0 .2rem; font-size: 1.4rem; }
+.family-card .card-body h3 { margin: 0 0 .2rem; }
+.family-rows { display: flex; flex-direction: column; gap: .75rem; }
+.family-row { display: flex; gap: 1rem; background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: .75rem; }
+.family-row-shot { flex: 0 0 8rem; }
+.family-row-body h3 { margin: 0 0 .2rem; font-size: 1.05rem; }
+.family-row-desc { margin: .4rem 0 0; color: var(--muted); }
+.shot-small { width: 8rem; height: 6rem; object-fit: cover; border-radius: 4px; display: block; }
+
+/* --- family / model header --------------------------------------------------- */
+.crumbs { display: flex; gap: .4rem; margin: 0 0 .75rem; color: var(--muted); font-size: .9rem; }
+.family-head { display: flex; gap: 1.25rem; margin: 0 0 1.25rem; }
+.family-head-shot { flex: 0 0 16rem; }
+.family-head-body h1 { margin: 0 0 .3rem; }
+.chips { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .75rem; }
+.chip { border: 1px solid var(--line); border-radius: 999px; padding: .2rem .7rem; font-size: .85rem; }
+.chip.active { background: var(--accent-dim); border-color: var(--accent); }
+
+/* --- catalog: view toggle and table ------------------------------------------ */
+.toolbar-right { display: flex; align-items: center; gap: 1rem; }
+.view-toggle { display: flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.view-option { padding: .25rem .7rem; font-size: .85rem; color: var(--muted); }
+.view-option.active { background: var(--panel); color: var(--text); }
+.button.small { padding: .15rem .5rem; font-size: .8rem; }
+.card-actions { display: flex; flex-wrap: wrap; gap: .3rem; margin: .5rem 0 0; }
+
+.catalog-table { width: 100%; border-collapse: collapse; }
+.catalog-table th { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--line);
+  color: var(--muted); font-weight: normal; font-size: .85rem; }
+.catalog-table td { padding: .6rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+.catalog-table .row-title { font-weight: 600; }
+.catalog-table .row-desc { max-width: 32rem; }
+.catalog-table .card-meta { margin: .2rem 0 0; }
+
+@media (max-width: 800px) {
+  .family-head, .family-row { flex-direction: column; }
+  .family-head-shot, .family-row-shot { flex: none; }
+  .catalog-table .row-desc, .catalog-table td:nth-child(4), .catalog-table th:nth-child(4) { display: none; }
+}

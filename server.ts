@@ -12,17 +12,21 @@ import * as db from './db.ts';
 import type { ProgramInput, ProgramRow, RefTable, User } from './db.ts';
 import {
   BodyTooLarge, clientIp, detectImage, formatBytes, html, isSafeName,
-  json, readBody, readForm, redirect, sendFile, slugify, text,
+  cookies, json, readBody, readForm, redirect, sendFile, setCookie, slugify, text,
 } from './http.ts';
 import {
   authenticate, currentUser, endSession, hashPassword, loginBlockedFor, noteLoginFailure,
   noteLoginSuccess, sameOrigin, startSession, verifyPassword,
 } from './auth.ts';
-import { renderMarkdown } from './markdown.ts';
+import { markdownExcerpt, renderMarkdown } from './markdown.ts';
 import { refSpec } from './refs.ts';
+import { isReservedSlug } from './reserved.ts';
 import { errorPage } from './views/layout.ts';
-import { listPage, programPage } from './views/catalog.ts';
-import type { ListQuery } from './views/catalog.ts';
+import { catalogPage } from './views/catalog.ts';
+import type { CatalogContext, ListQuery, ViewMode } from './views/catalog.ts';
+import { homePage } from './views/home.ts';
+import { familyHeader } from './views/family.ts';
+import { programPage } from './views/program.ts';
 import { adminListPage, editPage, loginPage, passwordPage } from './views/admin.ts';
 import { refEditPage, refListPage } from './views/admin-refs.ts';
 import { userEditPage, userListPage } from './views/admin-users.ts';
@@ -41,8 +45,13 @@ type Handler = (ctx: Ctx) => Promise<void> | void;
 type Route = { method: string; pattern: RegExp; keys: string[]; handler: Handler; auth: boolean };
 
 const routes: Route[] = [];
+let sealed = false;
 
 function route(method: string, path: string, handler: Handler, auth = false): void {
+  if (sealed) {
+    // /:family matches every top-level path, so anything registered after it is dead code.
+    throw new Error(`route(${method} ${path}) after sealRoutes(): the family routes must stay last`);
+  }
   const keys: string[] = [];
   // Escape regex specials (dots in /favicon.ico) before turning :params into groups.
   const pattern = new RegExp(
@@ -57,31 +66,34 @@ function route(method: string, path: string, handler: Handler, auth = false): vo
 // ----------------------------------------------------------------- public
 
 route('GET', '/', (ctx) => {
-  const p = ctx.url.searchParams;
-  const query: ListQuery = {
-    q: (p.get('q') ?? '').trim().slice(0, 100),
-    familyId: Number(p.get('family')) || null,
-    modelId: Number(p.get('model')) || null,
-    categoryId: Number(p.get('category')) || null,
-    year: Number(p.get('year')) || null,
-    sort: p.get('sort') ?? 'new',
-  };
-  const page = Number(p.get('page')) || 1;
-  const result = db.listPrograms({ ...query, page, perPage: 24 });
-  html(
-    ctx.res,
-    200,
-    listPage(result.rows, result.total, result.page, result.pages, query, db.facets(query.familyId), db.listFamilies()),
-  );
+  html(ctx.res, 200, homePage(db.familyCards(), viewMode(ctx)));
+});
+
+route('GET', '/catalog', (ctx) => {
+  const query = readQuery(ctx);
+  renderCatalog(ctx, query, {
+    basePath: '/catalog',
+    title: 'Все программы',
+    description: config.siteTagline,
+    family: null,
+    model: null,
+    header: '<nav class="crumbs"><a href="/">все семейства</a></nav>',
+  });
 });
 
 route('GET', '/p/:slug', (ctx) => {
   const program = db.getProgramBySlug(ctx.params.slug);
   if (!program || (!program.published && !ctx.user)) return notFound(ctx);
-  html(ctx.res, 200, programPage(program, db.modelsForProgram(program.id), {
-    download: program.file_name ? `/dl/${program.slug}` : '',
-    emulators: db.emulatorFilesFor([program.id]).get(program.id) ?? [],
-  }));
+  html(
+    ctx.res,
+    200,
+    programPage(
+      program,
+      db.getFamilyById(program.family_id),
+      db.modelsForProgram(program.id),
+      db.emulatorFilesFor([program.id]).get(program.id) ?? [],
+    ),
+  );
 });
 
 route('GET', '/dl/:slug', async (ctx) => {
@@ -533,7 +545,97 @@ route('POST', '/admin/password', async (ctx) => {
   html(ctx.res, 200, passwordPage(user, 'Пароль изменён.'));
 }, true);
 
+// ------------------------------------------------------ public: family pages
+
+/**
+ * Registered last, and nothing may follow: /:family matches any single top-level
+ * segment, so it would shadow every route added after it. route() throws afterwards.
+ */
+function sealRoutes(): void {
+  route('GET', '/:family', (ctx) => {
+    const family = familyFromPath(ctx, ctx.params.family);
+    if (!family) return notFound(ctx);
+    const query = { ...readQuery(ctx), familyId: family.id };
+    renderCatalog(ctx, query, {
+      basePath: `/${family.slug}`,
+      title: family.name,
+      description: markdownExcerpt(family.description, 200) || `Программы для ${family.name}`,
+      family,
+      model: null,
+      header: familyHeader(family, db.listModels(family.id), null),
+    });
+  });
+
+  route('GET', '/:family/:model', (ctx) => {
+    const family = familyFromPath(ctx, ctx.params.family);
+    if (!family) return notFound(ctx);
+    const model = db.getModelBySlug(family.id, ctx.params.model);
+    if (!model) return notFound(ctx);
+    const query = { ...readQuery(ctx), familyId: family.id, modelId: model.id };
+    renderCatalog(ctx, query, {
+      basePath: `/${family.slug}/${model.slug}`,
+      title: `${family.name} · ${model.name}`,
+      description: markdownExcerpt(model.description, 200) || `Программы для ${model.name}`,
+      family,
+      model,
+      header: familyHeader(family, db.listModels(family.id), model),
+    });
+  });
+
+  sealed = true;
+}
+
+/** Reserved paths never reach a family, even if the route order were ever broken. */
+function familyFromPath(ctx: Ctx, slug: string): db.Family | null {
+  if (isReservedSlug(slug)) return null;
+  return db.getFamilyBySlug(slug);
+}
+
 // ------------------------------------------------------------------ helpers
+
+function readQuery(ctx: Ctx): ListQuery {
+  const p = ctx.url.searchParams;
+  return {
+    q: (p.get('q') ?? '').trim().slice(0, 100),
+    familyId: Number(p.get('family')) || null,
+    modelId: Number(p.get('model')) || null,
+    categoryId: Number(p.get('category')) || null,
+    year: Number(p.get('year')) || null,
+    sort: p.get('sort') ?? 'new',
+  };
+}
+
+/** ?view=… wins and is remembered; otherwise the visitor's last choice. */
+function viewMode(ctx: Ctx): ViewMode {
+  const asked = ctx.url.searchParams.get('view');
+  if (asked === 'tiles' || asked === 'table') {
+    setCookie(ctx.res, 'rc_view', asked, { path: '/', maxAge: 365 * 24 * 3600, sameSite: 'Lax' });
+    return asked;
+  }
+  return cookies(ctx.req).rc_view === 'table' ? 'table' : 'tiles';
+}
+
+function renderCatalog(ctx: Ctx, query: ListQuery, catalogCtx: CatalogContext): void {
+  const page = Number(ctx.url.searchParams.get('page')) || 1;
+  const view = viewMode(ctx);
+  const result = db.listPrograms({ ...query, page, perPage: 24 });
+  html(
+    ctx.res,
+    200,
+    catalogPage({
+      rows: result.rows,
+      total: result.total,
+      page: result.page,
+      pages: result.pages,
+      q: query,
+      facets: db.facets(query.familyId),
+      families: db.listFamilies(),
+      slots: db.emulatorFilesFor(result.rows.map((row) => row.id)),
+      ctx: catalogCtx,
+      view,
+    }),
+  );
+}
 
 function editData(program: ProgramRow | null) {
   return {
@@ -610,6 +712,9 @@ function storedFileName(prefix: string, original: string): string {
 function notFound(ctx: Ctx): void {
   html(ctx.res, 404, errorPage(404, 'Такой страницы нет.'));
 }
+
+// Everything else is registered by now; the two catch-all family routes go last.
+sealRoutes();
 
 // -------------------------------------------------------------- dispatch
 

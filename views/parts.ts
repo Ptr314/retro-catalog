@@ -72,3 +72,12 @@ export function mdEditor(name: string, label: string, value: string, rows = 12):
   <small class="hint">Markdown: # заголовок, **жирный**, *курсив*, <code class="mono">\`код\`</code>, списки, &gt; цитата, [ссылка](https://…).</small>
 </div>`;
 }
+
+/** Tiles / table switch. Server-rendered links — no client JavaScript, no CSP surface. */
+export function viewToggle(current: 'tiles' | 'table', href: (mode: 'tiles' | 'table') => string): string {
+  const item = (mode: 'tiles' | 'table', label: string): string =>
+    mode === current
+      ? `<span class="view-option active" aria-current="true">${label}</span>`
+      : `<a class="view-option" href="${escapeHtml(href(mode))}">${label}</a>`;
+  return `<div class="view-toggle" role="group" aria-label="Вид">${item('tiles', '▦ Плитка')}${item('table', '☰ Таблица')}</div>`;
+}
