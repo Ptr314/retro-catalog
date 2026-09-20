@@ -1,0 +1,6 @@
+config.json
+data/
+node_modules/
+docs/
+*.log
+.idea/

@@ -1,0 +1,28 @@
+[Unit]
+Description=Retro software catalog
+After=network.target
+
+[Service]
+Type=simple
+User=retro
+Group=retro
+WorkingDirectory=/opt/retro-catalog
+ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning /opt/retro-catalog/server.ts
+Restart=always
+RestartSec=3
+Environment=NODE_ENV=production
+# Everything else lives in config.json next to the sources.
+
+# Hardening: the process only needs its own data directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/retro-catalog/data
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

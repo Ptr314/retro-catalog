@@ -1,0 +1,14 @@
+# Caddy gets a certificate automatically and proxies to the Node process.
+retro.example.com {
+	encode gzip
+
+	# Program files and screenshots are served straight from disk, bypassing Node.
+	handle_path /files/* {
+		root * /opt/retro-catalog/data/files
+		header Access-Control-Allow-Origin "*"
+		header X-Content-Type-Options "nosniff"
+		file_server
+	}
+
+	reverse_proxy 127.0.0.1:8080
+}
