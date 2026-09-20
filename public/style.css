@@ -192,8 +192,15 @@ button:active, .button:active { transform: translate(2px, 2px); }
 
 /* ----------------------------------------------------------------- screens */
 
-/* The housing around a tube. Scanlines and the vignette sit on ::after so the
-   image underneath stays a plain <img>. */
+/*
+ * The housing around a tube: dark bezel, rounded glass, a faint edge of light.
+ *
+ * The screenshot itself is left alone. Scanlines used to run across it, but they fight
+ * the content they sit on: these are pixel-art screens, and a 1px-per-3px grid over
+ * hand-placed pixels reads as moiré, not as a CRT — worst of all in the small tiles.
+ * The glare and the vignette stayed, at roughly a third of their old strength, and the
+ * image no longer gets dimmed and desaturated. What says "screen" now is the shape.
+ */
 .card-shot, .program-shot, .family-head-shot, .family-row-shot, .catalog-table .thumb a {
   display: block; position: relative;
   background: var(--ink); padding: .5rem;
@@ -203,37 +210,24 @@ button:active, .button:active { transform: translate(2px, 2px); }
   content: ""; position: absolute; inset: .5rem; pointer-events: none;
   border-radius: var(--tube);
   background:
-    linear-gradient(115deg, rgba(255, 255, 255, .07) 0%, transparent 28%),
-    radial-gradient(ellipse at center, transparent 55%, rgba(4, 8, 24, .55) 100%),
-    repeating-linear-gradient(to bottom, transparent 0 2px, rgba(4, 8, 24, .3) 2px 3px);
-  box-shadow: inset 0 0 0 1px rgba(255, 176, 0, .18);
+    linear-gradient(115deg, rgba(255, 255, 255, .035) 0%, transparent 24%),
+    radial-gradient(ellipse at center, transparent 68%, rgba(4, 8, 24, .22) 100%);
+  box-shadow: inset 0 0 0 1px rgba(255, 176, 0, .16);
 }
 .shot, .shot-big, .shot-small {
   display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: contain;
   image-rendering: pixelated;          /* 8-bit screenshots scale as pixels, not blur */
   background: #000; border-radius: var(--tube);
-  filter: brightness(.88) saturate(.92);
-  transition: filter .2s ease;
 }
 .shot-big { aspect-ratio: auto; min-height: 12rem; max-height: 62vh; }
 .shot-small { width: 8rem; height: 6rem; aspect-ratio: auto; object-fit: cover; }
-a:hover > .shot, a:hover > .shot-small, .card:hover .shot { filter: none; }
 
-/* No picture yet: the tube shows the name instead, in phosphor. Nothing may cross the
-   text — no inner grid here, and the housing drops its scanlines (see :has below). */
+/* No picture yet: the tube shows the name instead, in phosphor. */
 .shot-empty {
   display: grid; place-items: center; text-align: center; padding: .5rem;
   font-family: var(--display); font-weight: 500; font-size: 2.1rem; line-height: 1; letter-spacing: .04em;
   color: var(--accent); text-shadow: var(--glow-amber);
   background: radial-gradient(ellipse at center, #0d1740 0%, #060b24 100%);
-  filter: none;
-}
-.card-shot:has(.shot-empty)::after, .program-shot:has(.shot-empty)::after,
-.family-head-shot:has(.shot-empty)::after, .family-row-shot:has(.shot-empty)::after,
-.catalog-table .thumb a:has(.shot-empty)::after {
-  background:
-    linear-gradient(115deg, rgba(255, 255, 255, .07) 0%, transparent 28%),
-    radial-gradient(ellipse at center, transparent 55%, rgba(4, 8, 24, .55) 100%);
 }
 .shot-small.shot-empty { font-family: var(--sans); font-size: .8rem; letter-spacing: 0; text-shadow: none; }
 .shot-big.shot-empty { aspect-ratio: 4 / 3; font-size: 2.6rem; }
@@ -509,5 +503,5 @@ a.chip:hover { border-color: var(--accent); color: var(--accent); text-decoratio
 
 @media (prefers-reduced-motion: reduce) {
   .home-title::after, .shot-big { animation: none; }
-  button, .button, .card, .shot, .shot-small { transition: none; }
+  button, .button, .card { transition: none; }
 }
