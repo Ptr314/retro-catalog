@@ -43,11 +43,14 @@
   --muted: #8794cc;
   --accent: #ffb000;       /* amber phosphor */
   --accent-dim: #8a6410;
-  --hot: #ff5f15;          /* safety orange: what you can press */
+  --hot: #ff5f15;          /* safety orange: live lamps and the author-wanted mark */
   --hot-deep: #7a2600;
+  --action: #ffb703;       /* the primary action: the one key you are meant to press */
+  --action-deep: #755400;
   --danger: #ff4d5e;
   --glow-amber: 0 0 14px rgba(255, 176, 0, .45);
   --glow-hot: 0 0 18px rgba(255, 95, 21, .55);
+  --glow-action: 0 0 18px rgba(255, 183, 3, .5);
   --display: "Handjet", "Cascadia Mono", Consolas, monospace;
   --sans: "Golos Text", system-ui, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace;
@@ -171,15 +174,15 @@ button, .button {
 button:hover, .button:hover { text-decoration: none; box-shadow: var(--glow-amber); }
 button:active, .button:active { transform: translate(2px, 2px); }
 .button.primary {
-  color: var(--ink); background: var(--hot); border-color: var(--hot); font-weight: 600;
-  box-shadow: 3px 3px 0 var(--hot-deep);
+  color: var(--ink); background: var(--action); border-color: var(--action); font-weight: 600;
+  box-shadow: 3px 3px 0 var(--action-deep);
 }
-.button.primary:hover { box-shadow: 3px 3px 0 var(--hot-deep), var(--glow-hot); }
-.button.primary:active { box-shadow: 1px 1px 0 var(--hot-deep); }
+.button.primary:hover { box-shadow: 3px 3px 0 var(--action-deep), var(--glow-action); }
+.button.primary:active { box-shadow: 1px 1px 0 var(--action-deep); }
 .button.danger { color: var(--danger); border-color: var(--danger); }
 .button.danger:hover { box-shadow: 0 0 14px rgba(255, 77, 94, .45); }
 .button.small { font-size: .82rem; padding: .2rem .6rem .25rem; }
-.button.small.primary { box-shadow: 2px 2px 0 var(--hot-deep); }
+.button.small.primary { box-shadow: 2px 2px 0 var(--action-deep); }
 
 .linkish {
   font: inherit; font-size: .9rem; letter-spacing: 0;
