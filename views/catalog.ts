@@ -4,6 +4,7 @@
  */
 import type { EmulatorFile, Facets, Family, Model, ProgramRow } from '../db.ts';
 import { escapeHtml, formatBytes } from '../http.ts';
+import { firstParagraph } from '../markdown.ts';
 import { layout } from './layout.ts';
 import { imageTag, mdDetails, pager, plural, viewToggle, wantedBadge } from './parts.ts';
 
@@ -127,7 +128,7 @@ function tableRow(p: ProgramRow, slots: EmulatorFile[]): string {
   </td>
   <td>${p.year ?? ''}</td>
   <td>${escapeHtml(p.author)}</td>
-  <td class="row-desc">${mdDetails(p.description, 180)}</td>
+  <td class="row-desc">${mdDetails(firstParagraph(p.description), 180)}</td>
   <td class="row-actions">${actions(p, slots, true)}${
     p.file_size ? `<br><small class="muted">${escapeHtml(formatBytes(p.file_size))}</small>` : ''
   }</td>

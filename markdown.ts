@@ -156,7 +156,7 @@ function inline(text: string, stash: Stash): string {
   // Inline code first: nothing inside it should be interpreted.
   out = out.replace(/`([^`\n]+)`/g, (_m, code: string) => placeholder(stash, `<code>${code}</code>`));
 
-  out = out.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (match, label: string, href: string) => {
+  out = out.replace(/\[([^\]\n]+)]\(([^)\s]+)\)/g, (match, label: string, href: string) => {
     if (!SAFE_URL.test(href)) return match; // rendered as plain text
     const external = /^https?:\/\//.test(href);
     const attrs = external ? ' target="_blank" rel="nofollow noopener"' : '';
@@ -169,6 +169,24 @@ function inline(text: string, stash: Stash): string {
   out = out.replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,!?:;]|$)/g, '$1<em>$2</em>');
 
   return out.replaceAll('\n', '<br>');
+}
+
+/**
+ * Markdown source of the first block, up to the first blank line. A fenced code block
+ * may contain blank lines of its own, so a block with an unclosed fence runs on to its end.
+ */
+export function firstParagraph(source: string): string {
+  const blocks = String(source ?? '')
+    .replaceAll('\r\n', '\n')
+    .replaceAll('\r', '\n')
+    .trim()
+    .split(/\n[ \t]*\n/);
+  let out = '';
+  for (const block of blocks) {
+    out = out ? `${out}\n\n${block}` : block;
+    if ((out.match(/```/g) ?? []).length % 2 === 0) break;
+  }
+  return out;
 }
 
 /**
@@ -187,7 +205,7 @@ export function markdownExcerpt(source: string, limit = 220): string {
     .replace(/^\s{0,3}\d+\.\s+/gm, '')
     .replace(/^\s{0,3}(-{3,}|\*{3,}|_{3,})\s*$/gm, ' ')
     // The URL may carry balanced parens of its own: [x](javascript:alert(1))
-    .replace(/\[([^\]]+)\]\((?:[^()]|\([^()]*\))*\)/g, '$1')
+    .replace(/\[([^\]]+)]\((?:[^()]|\([^()]*\))*\)/g, '$1')
     .replace(/(\*\*|__|\*|_)/g, '')
     .replace(/\s+/g, ' ')
     .trim();
