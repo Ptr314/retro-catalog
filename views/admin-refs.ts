@@ -190,7 +190,7 @@ export function refEditPage(
   <header class="editor-head">
     <h1>${escapeHtml(title)}</h1>
     <div class="editor-actions">
-      <a class="button" href="/admin/ref/${spec.table}">К списку</a>
+      ${backLink(spec, row, options.familyId ?? 0)}
       <button class="button primary" type="submit">Сохранить</button>
     </div>
   </header>
@@ -226,6 +226,14 @@ ${row
     { title, nav: nav(user), bodyClass: 'admin', scripts: ['admin.js'] },
     body,
   );
+}
+
+/** A model is edited from its family's page, so that is where its editor leads back to. */
+function backLink(spec: RefSpec, row: RefRow | null, familyId: number): string {
+  if (spec.table !== 'models') return `<a class="button" href="/admin/ref/${spec.table}">К списку</a>`;
+  const family = row ? Number(row.family_id) : familyId;
+  const href = family ? `/admin/ref/families/${family}` : '/admin/ref/families';
+  return `<a class="button" href="${href}">К семейству</a>`;
 }
 
 function deleteConfirm(spec: RefSpec, row: RefRow, programCount: number): string {

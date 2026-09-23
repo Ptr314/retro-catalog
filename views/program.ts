@@ -22,6 +22,7 @@ export function programPage(
   family: Family | null,
   models: Model[],
   slots: EmulatorFile[],
+  canEdit = false,
 ): string {
   const familyLink = family
     ? `<a href="/${escapeHtml(family.slug)}">${escapeHtml(p.family_name)}</a>`
@@ -59,7 +60,12 @@ export function programPage(
     `<article class="program">
   <div class="program-shot">${imageTag(p.screenshot, `Скриншот: ${p.title}`, 'shot-big', p.family_name)}</div>
   <div class="program-info">
-    <h1>${escapeHtml(p.title)}</h1>
+    ${canEdit
+      ? `<div class="title-row">
+      <h1>${escapeHtml(p.title)}</h1>
+      <a class="button small" href="/admin/edit/${p.id}">Редактировать</a>
+    </div>`
+      : `<h1>${escapeHtml(p.title)}</h1>`}
     <dl class="meta">
       ${rows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${v}</dd></div>`).join('')}
     </dl>

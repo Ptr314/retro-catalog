@@ -92,6 +92,7 @@ route('GET', '/p/:slug', (ctx) => {
       db.getFamilyById(program.family_id),
       db.modelsForProgram(program.id),
       db.emulatorFilesFor([program.id]).get(program.id) ?? [],
+      Boolean(ctx.user),
     ),
   );
 });
@@ -192,11 +193,22 @@ route('POST', '/admin/logout', (ctx) => {
 route('GET', '/admin', (ctx) => {
   const q = (ctx.url.searchParams.get('q') ?? '').trim().slice(0, 100);
   const page = Number(ctx.url.searchParams.get('page')) || 1;
-  const result = db.listPrograms({ q, page, perPage: 50, includeHidden: true, sort: 'new' });
-  html(ctx.res, 200, adminListPage(ctx.user!, result.rows, result.total, result.page, result.pages, q, db.stats()));
+  const familyId = Number(ctx.url.searchParams.get('family')) || 0;
+  const result = db.listPrograms({ q, familyId: familyId || null, page, perPage: 50, includeHidden: true, sort: 'new' });
+  html(ctx.res, 200, adminListPage(
+    ctx.user!, result.rows, result.total, result.page, result.pages, q, db.stats(), db.listFamilies(), familyId,
+  ));
 }, true);
 
-route('GET', '/admin/new', (ctx) => html(ctx.res, 200, editPage(ctx.user!, null, editData(null))), true);
+/** ?family_id= and ?model_id= preselect them — the "Добавить" links on the model page and the list. */
+route('GET', '/admin/new', (ctx) => {
+  const familyId = Number(ctx.url.searchParams.get('family_id')) || 0;
+  const modelId = Number(ctx.url.searchParams.get('model_id')) || 0;
+  const family = familyId ? db.getRef('families', familyId) : null;
+  // A model of another family would be dropped on save anyway; do not show it ticked.
+  const modelIds = family && db.listModels(familyId).some((m) => m.id === modelId) ? [modelId] : [];
+  html(ctx.res, 200, editPage(ctx.user!, null, { ...editData(null), familyId: family ? familyId : 0, selectedModels: modelIds }));
+}, true);
 
 route('GET', '/admin/edit/:id', (ctx) => {
   const program = db.getProgramById(Number(ctx.params.id));
@@ -264,8 +276,9 @@ route('POST', '/admin/save', async (ctx) => {
   }
   for (const [emulatorId, url] of emulatorUrls) db.setEmulatorUrl(savedId, emulatorId, url);
 
-  if (wantsJson) return json(ctx.res, 200, { id: savedId, slug: input.slug });
-  redirect(ctx.res, `/admin/edit/${savedId}`);
+  if (wantsJson) return json(ctx.res, 200, { id: savedId, slug: input.slug, family_id: familyId });
+  // Back to the family's list, where the program was most likely picked from.
+  redirect(ctx.res, `/admin?family=${familyId}`);
 }, true);
 
 route('POST', '/admin/delete/:id', async (ctx) => {
@@ -445,7 +458,10 @@ route('POST', '/admin/ref/:table/save', async (ctx) => {
   }
   // A renamed family, model or category changes what the search haystack should contain.
   db.rebuildSearchText();
-  redirect(ctx.res, `/admin/ref/${spec.table}/${savedId}`);
+  // A model is edited from its family's page, so saving returns there.
+  redirect(ctx.res, spec.table === 'models'
+    ? `/admin/ref/families/${values.family_id}`
+    : `/admin/ref/${spec.table}/${savedId}`);
 }, true);
 
 route('POST', '/admin/ref/:table/delete/:id', async (ctx) => {
@@ -576,6 +592,7 @@ function sealRoutes(): void {
       family,
       model: null,
       header: familyHeader(family, db.listModels(family.id), null),
+      addHref: ctx.user ? `/admin/new?family_id=${family.id}` : '',
     });
   });
 
@@ -592,6 +609,7 @@ function sealRoutes(): void {
       family,
       model,
       header: familyHeader(family, db.listModels(family.id), model),
+      addHref: ctx.user ? `/admin/new?family_id=${family.id}&model_id=${model.id}` : '',
     });
   });
 
@@ -658,6 +676,7 @@ function editData(program: ProgramRow | null) {
     emulators: db.listEmulators(),
     emulatorFiles: program ? (db.emulatorFilesFor([program.id]).get(program.id) ?? []) : [],
     selectedModels: program ? db.modelIdsForProgram(program.id) : [],
+    familyId: program?.family_id ?? 0,
   };
 }
 

@@ -46,7 +46,6 @@
   if (editor) {
     editor.addEventListener('submit', function (event) {
       event.preventDefault();
-      var isNew = !editor.querySelector('input[name="id"]').value;
       var entity = editor.getAttribute('data-entity');
       say('Сохраняю…');
 
@@ -76,15 +75,11 @@
 
           return uploads
             .reduce(function (chain, next) { return chain.then(next); }, Promise.resolve())
-            .then(function () { return { id: saved.id, uploaded: uploads.length > 0 }; });
+            .then(function () { return saved; });
         })
-        .then(function (result) {
-          // A new record or a fresh upload changes what the page shows — reopen it.
-          if (isNew || result.uploaded) {
-            window.location.href = '/admin/edit/' + result.id;
-            return;
-          }
-          say('Сохранено.');
+        .then(function (saved) {
+          // Saved and uploaded: back to the family's list.
+          window.location.href = '/admin?family=' + saved.family_id;
         })
         .catch(function (err) { say(err.message, true); });
     });

@@ -338,6 +338,10 @@ a.chip:hover { border-color: var(--accent); color: var(--accent); text-decoratio
 
 /* ----------------------------------------------------------------- program */
 
+/* A heading with an admin-only button beside it (program page). */
+.title-row { display: flex; align-items: center; gap: .6rem 1.2rem; flex-wrap: wrap; margin-bottom: .7rem; }
+.title-row h1 { margin: 0; }
+
 .program { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 2.2rem; align-items: start; }
 .program-shot { border: 2px solid var(--line); }
 .meta { display: grid; grid-template-columns: max-content 1fr; gap: .4rem 1.4rem; margin: 1rem 0 1.5rem; padding: .9rem 0; border-top: 2px solid var(--line); border-bottom: 2px solid var(--line); }

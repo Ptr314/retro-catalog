@@ -28,6 +28,8 @@ export type CatalogContext = {
   model: Model | null;
   /** Rendered above the filters. */
   header: string;
+  /** Logged-in administrators only: a new program preset to this family/model. */
+  addHref?: string;
 };
 
 export type CatalogView = {
@@ -171,6 +173,7 @@ export function catalogBody(v: CatalogView): string {
   <div class="toolbar-right">
     <p class="count">${v.total} ${plural(v.total, 'программа', 'программы', 'программ')}</p>
     ${viewToggle(view, (mode) => queryString(ctx.basePath, q, { view: mode }))}
+    ${ctx.addHref ? `<a class="button small" href="${escapeHtml(ctx.addHref)}">Добавить</a>` : ''}
   </div>
 </section>
 ${body}

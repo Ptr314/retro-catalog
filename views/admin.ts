@@ -58,8 +58,18 @@ export function adminListPage(
   pages: number,
   q: string,
   stats: Stats,
+  families: Family[],
+  familyId: number,
 ): string {
-  const href = (n: number): string => `/admin?page=${n}${q ? `&q=${encodeURIComponent(q)}` : ''}`;
+  const href = (n: number): string =>
+    `/admin?page=${n}${familyId ? `&family=${familyId}` : ''}${q ? `&q=${encodeURIComponent(q)}` : ''}`;
+  const familyFilter = `<select name="family" aria-label="Семейство">
+      <option value="">все семейства</option>
+      ${families
+        .map((f) => `<option value="${f.id}"${f.id === familyId ? ' selected' : ''}>${escapeHtml(f.name)}</option>`)
+        .join('')}
+    </select>`;
+  const newHref = familyId ? `/admin/new?family_id=${familyId}` : '/admin/new';
 
   const body = `
 <section class="admin-head">
@@ -74,9 +84,10 @@ export function adminListPage(
     <li><b>${stats.runs}</b> запусков</li>
   </ul>
   <form class="filters" method="get" action="/admin">
+    ${familyFilter}
     <input class="search" type="search" name="q" value="${escapeHtml(q)}" placeholder="Поиск по каталогу">
     <button type="submit">Найти</button>
-    <a class="button primary" href="/admin/new">Добавить программу</a>
+    <a class="button primary" href="${newHref}">Добавить программу</a>
   </form>
 </section>
 <table class="admin-table">
@@ -94,7 +105,7 @@ export function adminListPage(
     </tr>`).join('')}
   </tbody>
 </table>
-${rows.length === 0 ? '<p class="empty">Пока ничего нет. <a href="/admin/new">Добавьте первую программу</a>.</p>' : ''}
+${rows.length === 0 ? '<p class="empty">Пока ничего нет. <a href="${newHref}">Добавьте первую программу</a>.</p>' : ''}
 ${pager(page, pages, href, total)}`;
 
   return layout({ title: 'Программы', nav: nav(user), bodyClass: 'admin', scripts: ['admin.js'] }, body);
@@ -107,6 +118,8 @@ export type EditData = {
   emulators: Emulator[];
   emulatorFiles: EmulatorFile[];
   selectedModels: number[];
+  /** The program's family, or the one a new program was started from; 0 = none chosen. */
+  familyId: number;
 };
 
 /** The address the emulator (or anyone else) fetches the file by. */
@@ -164,7 +177,7 @@ export function editPage(user: User, p: ProgramRow | null, data: EditData, error
   }
 
   const familyOptions = data.families
-    .map((f) => `<option value="${f.id}"${p && p.family_id === f.id ? ' selected' : ''}>${escapeHtml(f.name)}</option>`)
+    .map((f) => `<option value="${f.id}"${f.id === data.familyId ? ' selected' : ''}>${escapeHtml(f.name)}</option>`)
     .join('');
 
   const categoryOptions = [`<option value="">— без категории —</option>`]
@@ -200,7 +213,7 @@ export function editPage(user: User, p: ProgramRow | null, data: EditData, error
     <h1>${isNew ? 'Новая программа' : escapeHtml(p.title)}</h1>
     <div class="editor-actions">
       ${p ? `<a class="button" href="/p/${escapeHtml(p.slug)}" target="_blank" rel="noopener">Посмотреть</a>` : ''}
-      <a class="button" href="/admin">К списку</a>
+      <a class="button" href="${data.familyId ? `/admin?family=${data.familyId}` : '/admin'}">К списку</a>
       <button class="button primary" type="submit">Сохранить</button>
     </div>
   </header>
