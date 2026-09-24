@@ -11,5 +11,16 @@
       if (target.name === 'family' && model) model.value = '';
       form.requestSubmit();
     });
+
+    // Build the address by hand so empty filters stay out of it: ?q=x, not ?q=x&family=&model=…
+    form.addEventListener('submit', function (e) {
+      var params = new URLSearchParams();
+      new FormData(form).forEach(function (value, name) {
+        if (typeof value === 'string' && value.trim() !== '') params.append(name, value);
+      });
+      e.preventDefault();
+      var query = params.toString();
+      location.assign(form.action + (query ? '?' + query : ''));
+    });
   });
 })();
