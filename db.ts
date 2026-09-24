@@ -65,6 +65,8 @@ export type Program = {
   author: string;
   /** 1 = "Разыскивается автор". */
   author_wanted: number;
+  /** 1 = shown first under the "new" order. */
+  promoted: number;
   /** http(s) link shown as «Автор/Источник», or empty. */
   source_url: string;
   /** Markdown source. */
@@ -276,6 +278,9 @@ const migrations: string[] = [
   // here no longer implies a file: file_name and file_url are both optional, but a row
   // with neither is deleted rather than kept.
   `ALTER TABLE program_emulator_files ADD COLUMN file_url TEXT NOT NULL DEFAULT '';`,
+
+  // Promoted programs head the "new" order.
+  `ALTER TABLE programs ADD COLUMN promoted INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 /** Runs fn inside BEGIN/COMMIT, rolling back on any throw. Must not be nested. */
@@ -445,7 +450,7 @@ export type ListOptions = {
 };
 
 const SORTS: Record<string, string> = {
-  new: 'p.created_at DESC, p.id DESC',
+  new: 'p.promoted DESC, p.created_at DESC, p.id DESC',
   title: 'p.title ASC',
   year: 'p.year IS NULL, p.year DESC, p.title ASC',
   popular: 'p.downloads + p.runs DESC, p.title ASC',
@@ -525,12 +530,12 @@ export function createProgram(p: ProgramInput, modelIds: number[]): number {
     const result = db
       .prepare(
         `INSERT INTO programs
-           (slug, title, family_id, category_id, year, author, author_wanted, source_url,
+           (slug, title, family_id, category_id, year, author, author_wanted, promoted, source_url,
             description, published, created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
-        p.slug, p.title, p.family_id, p.category_id, p.year, p.author, p.author_wanted, p.source_url,
+        p.slug, p.title, p.family_id, p.category_id, p.year, p.author, p.author_wanted, p.promoted, p.source_url,
         p.description, p.published, ts, ts,
       );
     const id = Number(result.lastInsertRowid);
@@ -545,11 +550,11 @@ export function updateProgram(id: number, p: ProgramInput, modelIds: number[]): 
     db.prepare(
       `UPDATE programs SET
          slug = ?, title = ?, family_id = ?, category_id = ?, year = ?, author = ?,
-         author_wanted = ?, source_url = ?, description = ?, published = ?, updated_at = ?
+         author_wanted = ?, promoted = ?, source_url = ?, description = ?, published = ?, updated_at = ?
        WHERE id = ?`,
     ).run(
       p.slug, p.title, p.family_id, p.category_id, p.year, p.author,
-      p.author_wanted, p.source_url, p.description, p.published, now(), id,
+      p.author_wanted, p.promoted, p.source_url, p.description, p.published, now(), id,
     );
     writeProgramModels(id, modelIds);
     writeSearchText(id);

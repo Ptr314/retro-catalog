@@ -138,7 +138,7 @@ function tableRow(p: ProgramRow, slots: EmulatorFile[]): string {
 export function catalogBody(v: CatalogView): string {
   const { q, ctx, view, facets } = v;
 
-  const filters = `<form class="filters" method="get" action="${escapeHtml(ctx.basePath)}">
+  const filters = `<form class="filters" method="get" action="${escapeHtml(ctx.basePath)}" data-autosubmit>
   <input class="search" type="search" name="q" value="${escapeHtml(q.q)}" placeholder="Название, автор…" aria-label="Поиск">
   ${ctx.family ? '' : `<select name="family" aria-label="Семейство">${idOptions(v.families, q.familyId, 'Все семейства')}</select>`}
   ${ctx.model ? '' : `<select name="model" aria-label="Модель">${idOptions(facets.models, q.modelId, 'Все модели')}</select>`}
@@ -182,5 +182,5 @@ ${pager(v.page, v.pages, (n) => queryString(ctx.basePath, q, { page: n, view: vi
 }
 
 export function catalogPage(v: CatalogView): string {
-  return layout({ title: v.ctx.title, description: v.ctx.description }, catalogBody(v));
+  return layout({ title: v.ctx.title, description: v.ctx.description, scripts: ['filters.js'] }, catalogBody(v));
 }

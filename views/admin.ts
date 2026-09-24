@@ -83,7 +83,7 @@ export function adminListPage(
     <li><b>${stats.downloads}</b> скачиваний</li>
     <li><b>${stats.runs}</b> запусков</li>
   </ul>
-  <form class="filters" method="get" action="/admin">
+  <form class="filters" method="get" action="/admin" data-autosubmit>
     ${familyFilter}
     <input class="search" type="search" name="q" value="${escapeHtml(q)}" placeholder="Поиск по каталогу">
     <button type="submit">Найти</button>
@@ -100,7 +100,7 @@ export function adminListPage(
       <td>${escapeHtml(p.category_name ?? '')}</td>
       <td>${p.year ?? ''}</td>
       <td>${p.file_name ? `<span title="${escapeHtml(p.file_name)}">${escapeHtml(formatBytes(p.file_size) || 'есть')}</span>` : '<span class="muted">—</span>'}</td>
-      <td>${p.published ? '<span class="badge ok">виден</span>' : '<span class="badge">скрыт</span>'}</td>
+      <td>${p.published ? '<span class="badge ok">виден</span>' : '<span class="badge">скрыт</span>'}${p.promoted ? ' <span class="badge">продвигается</span>' : ''}</td>
       <td class="row-actions"><a href="/p/${escapeHtml(p.slug)}">открыть</a></td>
     </tr>`).join('')}
   </tbody>
@@ -108,7 +108,7 @@ export function adminListPage(
 ${rows.length === 0 ? '<p class="empty">Пока ничего нет. <a href="${newHref}">Добавьте первую программу</a>.</p>' : ''}
 ${pager(page, pages, href, total)}`;
 
-  return layout({ title: 'Программы', nav: nav(user), bodyClass: 'admin', scripts: ['admin.js'] }, body);
+  return layout({ title: 'Программы', nav: nav(user), bodyClass: 'admin', scripts: ['admin.js', 'filters.js'] }, body);
 }
 
 export type EditData = {
@@ -241,6 +241,7 @@ export function editPage(user: User, p: ProgramRow | null, data: EditData, error
       </label>
       ${mdEditor('description', 'Описание', p?.description ?? '')}
       <label class="check"><input type="checkbox" name="published" value="1"${!p || p.published ? ' checked' : ''}> Показывать в каталоге</label>
+      <label class="check"><input type="checkbox" name="promoted" value="1"${p?.promoted ? ' checked' : ''}> Продвигать — первой в «Сначала новые»</label>
       ${modelGroups
         ? `<div data-model-groups>${modelGroups}</div>`
         : '<small class="hint">Моделей пока нет. <a href="/admin/ref/models/new">Добавить модель</a>.</small>'}

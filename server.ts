@@ -263,6 +263,7 @@ route('POST', '/admin/save', async (ctx) => {
     year: Number(form.get('year')) || null,
     author: (form.get('author') ?? '').trim().slice(0, 120),
     author_wanted: form.get('author_wanted') ? 1 : 0,
+    promoted: form.get('promoted') ? 1 : 0,
     source_url: sourceUrl,
     description: (form.get('description') ?? '').trim().slice(0, 20000),
     published: form.get('published') ? 1 : 0,
