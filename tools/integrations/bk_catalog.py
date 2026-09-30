@@ -2,7 +2,7 @@
 Import from BK Catalog (https://kalininskiy.github.io/bk-catalog/), integration "bk-catalog".
 
     py tools/integrations/bk_catalog.py [--source PATH|URL] [--limit N] [--test]
-                                        [--only games,software,demoscene] [--allow-mass-unpublish]
+                                        [--only games,software,demoscene] [--quiet] [--allow-mass-unpublish]
 
   --source   a zip with games.json / software.json / demoscene.json, a directory holding
              them, the URL of such a zip, or a base URL the three files hang off.
@@ -11,6 +11,8 @@ Import from BK Catalog (https://kalininskiy.github.io/bk-catalog/), integration 
   --test     walk the data and print what would happen; nothing is downloaded and the
              database is opened read-only.
   --only     process only these sections.
+  --quiet    no line per record: only the summary at the end (what was created, what
+             went wrong, what to look at). Meant for a full --test pass.
 
 A record is matched by its ID (programs.integration + external_id). A new one is created
 with its file and screenshots copied to us; an existing one is touched only when the
@@ -291,9 +293,19 @@ class Importer:
         self.args = args
         self.test = args.test
         self.counts = {'created': 0, 'updated': 0, 'unchanged': 0, 'errors': 0, 'restored': 0, 'missing': 0}
-        self.unmapped_platforms = {}
         self.planned_slugs = set()        # --test: slugs "given out" earlier in this run
-        self.planned_categories = set()   # --test: categories that would be created
+
+        # Everything below feeds the summary printed at the end (print_summary).
+        self.setup_problems = []          # missing models, missing emulator
+        self.errors = []                  # (label, message): the record was not imported
+        self.skipped_shots = []           # (label, message): imported, minus a picture
+        self.new_categories = {}          # (top, sub or '') -> programs put there in this run
+        self.without_models = {}          # platform -> programs
+        self.without_launch = {}          # reason -> programs
+        self.without_genre = {}           # top category -> programs with no genre in the source
+        self.without_shots = 0
+        self.renamed_slugs = []           # (label, slug): the title's own slug was taken
+        self.gone = []                    # labels marked as missing from the source
 
         family = catalog.family_by_slug(settings['family'])
         if family is None:
@@ -309,12 +321,16 @@ class Importer:
             known = [model_ids[s] for s in slugs if s in model_ids]
             for s in slugs:
                 if s not in model_ids:
-                    log('! модель «%s» (платформа «%s») не найдена в семействе «%s»' % (s, platform, family['name']))
+                    self.setup_problems.append(
+                        'модель «%s» (платформа «%s») не найдена в семействе «%s»' % (s, platform, family['name']))
             self.platform_models[platform] = known
 
         self.emulator = catalog.emulator_by_name(settings['emulator'])
         if self.emulator is None:
-            log('! эмулятор «%s» не найден — программы импортируются без кнопки запуска' % settings['emulator'])
+            self.setup_problems.append(
+                'эмулятор «%s» не найден — программы импортируются без кнопки запуска' % settings['emulator'])
+        for problem in self.setup_problems:
+            log('! ' + problem)
 
         # What a record's hash depends on besides the record itself: when the admin adds
         # the missing model or emulator, "unchanged" programs must be revisited.
@@ -327,22 +343,61 @@ class Importer:
         body = json.dumps(record, sort_keys=True, ensure_ascii=False) + self.context
         return hashlib.sha256(body.encode('utf-8')).hexdigest()
 
+    # ------------------------------------------------------------ reporting
+
+    def say(self, line):
+        """A per-record line; --quiet leaves only the summary."""
+        if not self.args.quiet:
+            log(line)
+
+    def error(self, label, message):
+        self.counts['errors'] += 1
+        self.errors.append((label, str(message)))
+        self.say('[ошибка] %s: %s' % (label, message))
+
+    def launch_obstacle(self, mapped):
+        """Why a program gets no launch button, in the operator's words."""
+        if not mapped['file_url']:
+            return 'в источнике нет файла'
+        if self.emulator is None:
+            return 'эмулятор не найден'
+        if mapped['platform'] in NOT_BK_PLATFORMS:
+            return 'программа для %s' % mapped['platform']
+        name = url_file_name(mapped['file_url'])
+        return 'формат %s эмулятор не открывает' % (Path(name).suffix.lower() or '(без расширения)')
+
+    def note(self, mapped, label, top_category, source_genre, model_ids, launch, slug):
+        """One created or updated program, for the summary."""
+        def bump(table, key):
+            table[key] = table.get(key, 0) + 1
+
+        for key in ((top_category, ''), (top_category, mapped['genre'])):
+            if key in self.new_categories:
+                self.new_categories[key] += 1
+        if not model_ids:
+            bump(self.without_models, mapped['platform'] or '(платформа не указана)')
+        if not launch:
+            bump(self.without_launch, self.launch_obstacle(mapped))
+        if not source_genre:
+            bump(self.without_genre, top_category)
+        if not mapped['screenshots']:
+            self.without_shots += 1
+        if slug and slug != (slugify(mapped['title']) or slug):
+            self.renamed_slugs.append((label, slug))
+
     # ----------------------------------------------------------- one record
 
     def process(self, record, section, rule):
         mapped = map_record(record, section)
         label = '%s «%s»' % (mapped['external_id'], mapped['title'])
+        source_genre = mapped['genre']
         try:
             # From here on "genre" is the subcategory's name as it will be on our side.
             top_category, mapped['genre'] = resolve_category(rule, mapped['genre'])
         except CatalogError as err:
-            self.counts['errors'] += 1
-            log('[ошибка] %s: %s' % (label, err))
-            return
+            return self.error(label, err)
         if not mapped['title'] or mapped['external_id'] in ('None', ''):
-            self.counts['errors'] += 1
-            log('[ошибка] %s: нет ID или названия' % label)
-            return
+            return self.error(label, 'нет ID или названия')
 
         digest = self.source_hash(record)
         existing = self.catalog.find_program(INTEGRATION, mapped['external_id'])
@@ -350,27 +405,24 @@ class Importer:
         if existing and existing['source_hash'] == digest and not restored:
             self.counts['unchanged'] += 1
             if self.args.verbose:
-                log('[без изменений] %s' % label)
+                self.say('[без изменений] %s' % label)
             return
 
-        platform = mapped['platform']
-        if platform and platform not in self.platform_models and platform not in NOT_BK_PLATFORMS:
-            self.unmapped_platforms[platform] = self.unmapped_platforms.get(platform, 0) + 1
-        model_ids = self.platform_models.get(platform, [])
+        model_ids = self.platform_models.get(mapped['platform'], [])
         launch = self.emulator is not None and runnable(mapped)
 
         try:
             if self.test:
-                self.report_plan(existing, mapped, label, top_category, model_ids, launch, restored)
+                slug = self.report_plan(existing, mapped, label, top_category, model_ids, launch, restored)
             elif existing:
-                self.update(existing, mapped, label, top_category, model_ids, launch, digest, restored)
+                slug = self.update(existing, mapped, label, top_category, model_ids, launch, digest, restored)
             else:
-                self.create(mapped, label, top_category, model_ids, launch, digest)
+                slug = self.create(mapped, label, top_category, model_ids, launch, digest)
         except (CatalogError, OSError, ValueError, sqlite3.Error) as err:
             self.catalog.rollback()
-            self.counts['errors'] += 1
-            log('[ошибка] %s: %s' % (label, err))
-            return
+            return self.error(label, err)
+        # An existing program keeps its slug whatever it is: only new ones are reported as renamed.
+        self.note(mapped, label, top_category, source_genre, model_ids, launch, None if existing else slug)
         if restored:
             self.counts['restored'] += 1
 
@@ -388,11 +440,13 @@ class Importer:
             try:
                 data = fetch(url, self.catalog.max_screenshot_bytes)
             except CatalogError as err:
-                log('  ! %s: скриншот пропущен: %s' % (label, err))
+                self.skipped_shots.append((label, str(err)))
+                self.say('  ! %s: скриншот пропущен: %s' % (label, err))
                 continue
             ext = detect_image(data)
             if ext is None:
-                log('  ! %s: не картинка, пропущено: %s' % (label, url))
+                self.skipped_shots.append((label, 'не картинка: %s' % url))
+                self.say('  ! %s: не картинка, пропущено: %s' % (label, url))
                 continue
             out.append((url, data, ext))
             time.sleep(self.args.delay)
@@ -400,10 +454,17 @@ class Importer:
 
     def category_id(self, top_category, genre):
         """The genre under its section's category, both created on demand. Inside a unit of work."""
-        top = self.catalog.find_category(top_category) or self.catalog.create_category(top_category)
+        top = self.catalog.find_category(top_category)
+        if top is None:
+            top = self.catalog.create_category(top_category)
+            self.new_categories.setdefault((top_category, ''), 0)
         if not genre:
             return top
-        return self.catalog.find_category(genre, top) or self.catalog.create_category(genre, top)
+        sub = self.catalog.find_category(genre, top)
+        if sub is None:
+            sub = self.catalog.create_category(genre, top)
+            self.new_categories.setdefault((top_category, genre), 0)
+        return sub
 
     def free_slug(self, mapped):
         for slug in slug_candidates(mapped):
@@ -449,7 +510,9 @@ class Importer:
         catalog.commit()
 
         self.counts['created'] += 1
-        log('[создана] %s -> /%s/%s (%s)' % (label, self.family['slug'], slug, self.summary(file_data, launch, len(shots))))
+        self.say('[создана] %s -> /%s/%s (%s)' % (
+            label, self.family['slug'], slug, self.summary(file_data, launch, len(shots))))
+        return slug
 
     def update(self, existing, mapped, label, top_category, model_ids, launch, digest, restored):
         catalog = self.catalog
@@ -507,8 +570,9 @@ class Importer:
 
         self.counts['updated'] += 1
         note = 'вернулась в источник, снова опубликована; ' if restored else ''
-        log('[обновлена] %s -> /%s/%s (%s%s)' % (
+        self.say('[обновлена] %s -> /%s/%s (%s%s)' % (
             label, self.family['slug'], existing['slug'], note, self.summary(file_data, launch, len(added))))
+        return existing['slug']
 
     @staticmethod
     def summary(file_data, launch, shots):
@@ -524,15 +588,14 @@ class Importer:
         catalog = self.catalog
         top = catalog.find_category(top_category)
         created = []
-        if top is None and top_category not in self.planned_categories:
-            self.planned_categories.add(top_category)
+        if top is None and (top_category, '') not in self.new_categories:
+            self.new_categories[(top_category, '')] = 0
             created.append('категория «%s»' % top_category)
         genre = mapped['genre']
         if genre and (top is None or catalog.find_category(genre, top) is None):
-            key = '%s / %s' % (top_category, genre)
-            if key not in self.planned_categories:
-                self.planned_categories.add(key)
-                created.append('подкатегория «%s»' % key)
+            if (top_category, genre) not in self.new_categories:
+                self.new_categories[(top_category, genre)] = 0
+                created.append('подкатегория «%s / %s»' % (top_category, genre))
 
         details = [
             'файл %s' % url_file_name(mapped['file_url']) if mapped['file_url'] else 'без файла',
@@ -546,13 +609,14 @@ class Importer:
         if existing:
             self.counts['updated'] += 1
             note = ' (вернулась в источник)' if restored else ''
-            log('[обновить%s] %s -> /%s/%s (%s)' % (
+            self.say('[обновить%s] %s -> /%s/%s (%s)' % (
                 note, label, self.family['slug'], existing['slug'], ', '.join(details)))
-        else:
-            slug = self.free_slug(mapped)
-            self.planned_slugs.add(slug)
-            self.counts['created'] += 1
-            log('[создать] %s -> /%s/%s (%s)' % (label, self.family['slug'], slug, ', '.join(details)))
+            return existing['slug']
+        slug = self.free_slug(mapped)
+        self.planned_slugs.add(slug)
+        self.counts['created'] += 1
+        self.say('[создать] %s -> /%s/%s (%s)' % (label, self.family['slug'], slug, ', '.join(details)))
+        return slug
 
     # ------------------------------------------------- gone from the source
 
@@ -569,20 +633,94 @@ class Importer:
             return
         # A broken or truncated export must not take the catalog off the air.
         if len(gone) > max(3, len(rows) // 10) and not self.args.allow_mass_unpublish:
-            self.counts['errors'] += 1
-            log('[ошибка] в источнике нет %d из %d программ — слишком много для пропажи, ничего не снято. '
-                'Если выгрузка верна, повторите с --allow-mass-unpublish.' % (len(gone), len(rows)))
+            self.error('источник', 'в нём нет %d из %d программ — слишком много для пропажи, ничего не снято. '
+                       'Если выгрузка верна, повторите с --allow-mass-unpublish.' % (len(gone), len(rows)))
             return
         for row in gone:
             self.counts['missing'] += 1
             label = '%s «%s»' % (row['external_id'], row['title'])
+            self.gone.append(label)
             if self.test:
-                log('[пометить: нет в источнике] %s' % label)
+                self.say('[пометить: нет в источнике] %s' % label)
                 continue
             self.catalog.begin()
             self.catalog.update_program(row['id'], {'missing_since': now_iso(), 'published': 0})
             self.catalog.commit()
-            log('[нет в источнике] %s — снята с публикации' % label)
+            self.say('[нет в источнике] %s — снята с публикации' % label)
+
+    # ------------------------------------------------------------- summary
+
+    def print_summary(self, processed, total, notes):
+        """
+        The whole run on one screen: what changed, what was created on the way, what went
+        wrong, and what is worth a look. The "worth a look" tables count only programs
+        created or updated in this run — unchanged ones are not re-examined.
+        """
+        c = self.counts
+        will = 'будет ' if self.test else ''
+        changed = c['created'] + c['updated']
+
+        def section(title, lines):
+            if lines:
+                log('')
+                log(title)
+                for line in lines:
+                    log('  ' + line)
+
+        def table(counts):
+            return ['%-44s %d' % (key, n) for key, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+
+        def capped(lines, limit=40):
+            return lines[:limit] + (['… и ещё %d' % (len(lines) - limit)] if len(lines) > limit else [])
+
+        log('')
+        log('=' * 72)
+        log('ИТОГ%s' % (' ПРОВЕРОЧНОГО ПРОГОНА — в базе и на диске ничего не изменено' if self.test else ''))
+        log('=' * 72)
+        log('Записей в источнике: %d, обработано: %d' % (total, processed))
+        log('  %-28s %d' % (will + 'создано', c['created']))
+        log('  %-28s %d' % (will + 'обновлено', c['updated']))
+        log('  %-28s %d' % ('без изменений', c['unchanged']))
+        log('  %-28s %d' % ('вернулись в источник', c['restored']))
+        log('  %-28s %d' % ('пропали из источника', c['missing']))
+        log('  %-28s %d' % ('ошибок', c['errors']))
+        section('ЗАМЕЧАНИЯ', notes)
+
+        tops = [(top, n) for (top, sub), n in self.new_categories.items() if not sub]
+        subs = {}
+        for (top, sub), n in self.new_categories.items():
+            if sub:
+                subs.setdefault(top, []).append('%s (%d)' % (sub, n))
+        made = 'БУДУТ СОЗДАНЫ' if self.test else 'СОЗДАНЫ'
+        section('%s КАТЕГОРИИ ВЕРХНЕГО УРОВНЯ: %d — проверьте, нет ли такой же под другим названием'
+                % (made, len(tops)),
+                ['%s — программ: %d' % (top, n) for top, n in tops])
+        section('%s ПОДКАТЕГОРИИ: %d' % (made, sum(len(v) for v in subs.values())),
+                ['%s: %s' % (top, ', '.join(names)) for top, names in subs.items()])
+
+        section('НАСТРОЙКА: не найдено в справочниках', self.setup_problems)
+        section('ОШИБКИ: %d — эти записи не импортированы' % len(self.errors),
+                capped(['%s: %s' % pair for pair in self.errors]))
+        section('ПРОПУЩЕННЫЕ СКРИНШОТЫ: %d' % len(self.skipped_shots),
+                capped(['%s: %s' % pair for pair in self.skipped_shots]))
+        section('ПРОПАЛИ ИЗ ИСТОЧНИКА: %d — %s' % (
+                    len(self.gone), 'будут сняты с публикации' if self.test else 'сняты с публикации'),
+                capped(self.gone))
+
+        if changed:
+            section('БЕЗ МОДЕЛИ: %d из %d — по платформам' % (sum(self.without_models.values()), changed),
+                    table(self.without_models))
+            section('БЕЗ КНОПКИ ЗАПУСКА: %d из %d — по причинам' % (sum(self.without_launch.values()), changed),
+                    table(self.without_launch))
+            section('БЕЗ ЖАНРА В ИСТОЧНИКЕ: %d — попадают прямо в категорию' % sum(self.without_genre.values()),
+                    table(self.without_genre))
+            section('БЕЗ СКРИНШОТОВ: %d из %d' % (self.without_shots, changed),
+                    ['в каталоге у них будет пустой экран с названием семейства'] if self.without_shots else [])
+            section('АДРЕС С УТОЧНЕНИЕМ: %d — одноимённые программы, адрес по названию был занят'
+                    % len(self.renamed_slugs),
+                    capped(['%s -> /%s/%s' % (label, self.family['slug'], slug)
+                            for label, slug in self.renamed_slugs]))
+        log('')
 
 
 def main():
@@ -596,6 +734,7 @@ def main():
     parser.add_argument('--only', default=','.join(SECTIONS), help='разделы через запятую')
     parser.add_argument('--delay', type=float, default=0.05, help='пауза между скачиваниями, секунд')
     parser.add_argument('--verbose', action='store_true', help='показывать и записи без изменений')
+    parser.add_argument('--quiet', action='store_true', help='без строки на каждую запись: только итог')
     parser.add_argument('--allow-mass-unpublish', action='store_true',
                         help='разрешить снять с публикации больше 10%% программ интеграции')
     args = parser.parse_args()
@@ -633,25 +772,17 @@ def main():
             processed += 1
 
     # "Gone from the source" is only knowable after a complete pass over a non-empty source.
+    notes = []
     if limited:
-        log('Задан --limit: пропавшие из источника записи не проверялись.')
+        notes.append('задан --limit %d: пропавшие из источника записи не проверялись' % args.limit)
     elif total == 0:
-        importer.counts['errors'] += 1
-        log('[ошибка] источник пуст — пропавшие записи не проверялись')
+        importer.error('источник', 'пуст — пропавшие записи не проверялись')
     else:
         importer.mark_missing(seen, set(data))
 
     catalog.close()
-
-    c = importer.counts
-    for platform, n in sorted(importer.unmapped_platforms.items()):
-        log('! платформа «%s» не сопоставлена с моделью: %d записей остались без модели' % (platform, n))
-    verb = 'было бы ' if args.test else ''
-    log('Обработано %d из %d: %sсоздано %d, обновлено %d, без изменений %d, возвращено %d, '
-        'нет в источнике %d, ошибок %d.' % (
-            processed, total, verb, c['created'], c['updated'], c['unchanged'], c['restored'],
-            c['missing'], c['errors']))
-    return 1 if c['errors'] else 0
+    importer.print_summary(processed, total, notes)
+    return 1 if importer.counts['errors'] else 0
 
 
 if __name__ == '__main__':

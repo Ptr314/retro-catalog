@@ -150,12 +150,18 @@ npm run import -- catalog.json
 
 ```bash
 python3 tools/integrations/bk_catalog.py --test --limit 20   # только протокол, ничего не меняет
+python3 tools/integrations/bk_catalog.py --test --quiet      # прогон по всем записям: только итог
 python3 tools/integrations/bk_catalog.py                     # полный импорт
 ```
 
 `bk_catalog.py` — каталог [BK Catalog](https://kalininskiy.github.io/bk-catalog/), интеграция `bk-catalog`.
 Параметры: `--source` (zip, каталог или URL; по умолчанию из `config.json`), `--limit N`, `--test`,
-`--only games,software,demoscene`. Привязка к справочникам задаётся в `config.json`:
+`--only games,software,demoscene`, `--quiet` (без строки на каждую запись).
+
+Любой прогон заканчивается итогом: сколько создано и обновлено, какие категории и подкатегории
+заведены, какие записи не импортированы и почему, сколько программ осталось без модели, без кнопки
+запуска (с причинами), без жанра и без скриншотов, и каким одноимённым программам достался адрес с
+уточнением. Привязка к справочникам задаётся в `config.json`:
 
 ```json
 "integrations": {
