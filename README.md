@@ -222,14 +222,15 @@ python3 tools/integrations/bk_catalog.py                     # полный им
 ## Резервная копия базы
 
 ```bash
-python3 tools/backup_db.py             # data/backups/catalog-ГГГГММДД-ЧЧММСС.db
+python3 tools/backup_db.py             # data/backups/catalog-ГГГГММДД-ЧЧММСС.zip
 python3 tools/backup_db.py --keep 14   # и оставить только 14 последних копий
 python3 tools/backup_db.py --out /mnt/backup/catalog
 ```
 
 Сервер останавливать не нужно: копия снимается средствами SQLite, а не копированием файла, поэтому
-включает и то, что ещё лежит в `catalog.db-wal`. Перед тем как копия получит своё имя, она проходит
-`PRAGMA integrity_check`; при ошибке код возврата ненулевой. Копируется только база — `data/files` и
+включает и то, что ещё лежит в `catalog.db-wal`. Копия проходит `PRAGMA integrity_check`, затем
+упаковывается в zip (внутри один файл `catalog-….db`), и архив проверяется чтением; при любой ошибке
+код возврата ненулевой, а недоделанных файлов не остаётся. Копируется только база — `data/files` и
 `data/screenshots` сохраняйте отдельно. Удобно запускать перед импортом из внешнего каталога.
 
 ## Деплой

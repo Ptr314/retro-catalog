@@ -106,7 +106,8 @@ export async function diskReport(referenced: { files: string[]; screenshots: str
   const size = (name: string): number => top.find((entry) => entry.name === name)?.bytes ?? 0;
   const databaseBytes = size('catalog.db');
   const walBytes = size('catalog.db-wal') + size('catalog.db-shm');
-  const copies = backups.filter((entry) => entry.name.endsWith('.db'));
+  // backup_db.py writes .zip; .db copies made by its earlier version still count.
+  const copies = backups.filter((entry) => entry.name.endsWith('.zip') || entry.name.endsWith('.db'));
 
   let volume: DiskReport['volume'] = null;
   try {
