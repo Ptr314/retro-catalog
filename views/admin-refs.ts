@@ -36,6 +36,28 @@ const HEADERS: Record<string, string> = {
   family_id: 'Семейство',
 };
 
+/** What the list and edit pages need beyond the row itself. */
+export type RefEditOptions = {
+  familyId?: number;
+  /** A new subcategory started from its parent's page. */
+  parentId?: number;
+  error?: string;
+  childModels?: RefRow[];
+  /** Set on a top-level category's page, even when empty; absent on a subcategory's. */
+  childCategories?: RefRow[];
+  /** Top-level categories a subcategory may be put under. */
+  parents?: RefRow[];
+  programCount?: number;
+};
+
+function reorderCell(): string {
+  return `<td class="reorder-col">
+        <span class="reorder-handle" title="Перетащите строку">⠿</span>
+        <button class="linkish" type="button" data-move="up" title="Выше">↑</button>
+        <button class="linkish" type="button" data-move="down" title="Ниже">↓</button>
+      </td>`;
+}
+
 export function refListPage(
   user: User,
   spec: RefSpec,
@@ -44,6 +66,8 @@ export function refListPage(
   counts: Map<number, number>,
   notice = '',
   error = '',
+  /** Categories only: how many subcategories each listed (top-level) row has. */
+  childCounts: Map<number, number> | null = null,
 ): string {
   const columns = spec.table === 'models' ? ['family_id', ...spec.listFields] : spec.listFields;
 
@@ -61,18 +85,16 @@ ${spec.reorderable && rows.length > 1 ? '<p class="hint">Порядок стро
   <thead><tr>
     ${spec.reorderable ? '<th class="reorder-col"></th>' : ''}
     ${columns.map((c) => `<th>${escapeHtml(HEADERS[c] ?? c)}</th>`).join('')}
+    ${childCounts ? '<th>Подкатегорий</th>' : ''}
     <th>Программ</th>
   </tr></thead>
   <tbody>
     ${rows
       .map(
         (row) => `<tr${spec.reorderable ? ` draggable="true" data-id="${row.id}"` : ''}>
-      ${spec.reorderable ? `<td class="reorder-col">
-        <span class="reorder-handle" title="Перетащите строку">⠿</span>
-        <button class="linkish" type="button" data-move="up" title="Выше">↑</button>
-        <button class="linkish" type="button" data-move="down" title="Ниже">↓</button>
-      </td>` : ''}
+      ${spec.reorderable ? reorderCell() : ''}
       ${columns.map((c) => `<td${c === 'image' ? ' class="thumb"' : ''}>${cell(spec, row, c, families)}</td>`).join('')}
+      ${childCounts ? `<td>${childCounts.get(Number(row.id)) ?? 0}</td>` : ''}
       <td>${counts.get(Number(row.id)) ?? 0}</td>
     </tr>`,
       )
@@ -94,9 +116,10 @@ function fieldInput(
   field: RefField,
   row: RefRow | null,
   families: Family[],
-  familyId: number,
+  options: RefEditOptions,
   entity = '',
 ): string {
+  const familyId = options.familyId ?? 0;
   const common = `name="${field.name}"${field.maxLength ? ` maxlength="${field.maxLength}"` : ''}${
     field.required ? ' required' : ''
   }${field.placeholder ? ` placeholder="${escapeHtml(field.placeholder)}"` : ''}`;
@@ -109,6 +132,20 @@ function fieldInput(
         <select ${common}>${families
           .map((f) => `<option value="${f.id}"${f.id === selected ? ' selected' : ''}>${escapeHtml(f.name)}</option>`)
           .join('')}</select>
+      </label>${hint}`;
+    }
+    case 'parent': {
+      // A category that has subcategories stays top-level: the list offers nothing else.
+      const hasChildren = (options.childCategories?.length ?? 0) > 0;
+      const selected = row ? Number(row.parent_id) || 0 : (options.parentId ?? 0);
+      const parents = hasChildren ? [] : (options.parents ?? []).filter((c) => !row || Number(c.id) !== Number(row.id));
+      return `<label>${escapeHtml(field.label)}
+        <select ${common}>
+          <option value="">— верхний уровень —</option>
+          ${parents
+            .map((c) => `<option value="${c.id}"${Number(c.id) === selected ? ' selected' : ''}>${escapeHtml(c.name ?? '')}</option>`)
+            .join('')}
+        </select>
       </label>${hint}`;
     }
     case 'markdown':
@@ -140,7 +177,7 @@ export function refEditPage(
   spec: RefSpec,
   row: RefRow | null,
   families: Family[],
-  options: { familyId?: number; error?: string; childModels?: RefRow[]; programCount?: number } = {},
+  options: RefEditOptions = {},
 ): string {
   const isNew = row === null;
   const id = row ? Number(row.id) : 0;
@@ -165,11 +202,7 @@ export function refEditPage(
       ${options.childModels
         .map(
           (m) => `<tr draggable="true" data-id="${m.id}">
-        <td class="reorder-col">
-          <span class="reorder-handle" title="Перетащите строку">⠿</span>
-          <button class="linkish" type="button" data-move="up" title="Выше">↑</button>
-          <button class="linkish" type="button" data-move="down" title="Ниже">↓</button>
-        </td>
+        ${reorderCell()}
         <td class="thumb">${m.image ? `<img src="${escapeHtml(imageUrl(String(m.image)))}" alt="" loading="lazy">` : '<span class="thumb-empty"></span>'}</td>
         <td><a href="/admin/ref/models/${m.id}">${escapeHtml(m.name ?? '')}</a></td>
         <td>${escapeHtml(m.years ?? '')}</td>
@@ -184,13 +217,36 @@ export function refEditPage(
 </section>`
     : '';
 
+  // The second level of categories, managed from its parent's page like models from a family's.
+  const subcategoryTable = options.childCategories && row
+    ? `<section class="panel">
+  <h2>Подкатегории</h2>
+  ${options.childCategories.length
+    ? `<table class="admin-table" data-reorder="categories">
+    <thead><tr><th class="reorder-col"></th><th>Название</th></tr></thead>
+    <tbody>
+      ${options.childCategories
+        .map(
+          (c) => `<tr draggable="true" data-id="${c.id}">
+        ${reorderCell()}
+        <td><a href="/admin/ref/categories/${c.id}">${escapeHtml(c.name ?? '')}</a></td>
+      </tr>`,
+        )
+        .join('')}
+    </tbody>
+  </table>`
+    : '<p class="muted">Подкатегорий пока нет.</p>'}
+  <p><a class="button" href="/admin/ref/categories/new?parent_id=${id}">+ подкатегория</a></p>
+</section>`
+    : '';
+
   const body = `
 <form class="editor" method="post" action="/admin/ref/${spec.table}/save" data-entity="${uploadEntity(spec)}"${row ? ` data-id="${id}"` : ''}>
   <input type="hidden" name="id" value="${row ? id : ''}">
   <header class="editor-head">
     <h1>${escapeHtml(title)}</h1>
     <div class="editor-actions">
-      ${backLink(spec, row, options.familyId ?? 0)}
+      ${backLink(spec, row, options)}
       <button class="button primary" type="submit">Сохранить</button>
     </div>
   </header>
@@ -201,7 +257,7 @@ export function refEditPage(
       <h2>${escapeHtml(spec.titleOne)}</h2>
       ${spec.fields
         .filter((f) => f.type !== 'image')
-        .map((f) => fieldInput(f, row, families, options.familyId ?? 0))
+        .map((f) => fieldInput(f, row, families, options))
         .join('\n')}
     </section>
     ${spec.fields.some((f) => f.type === 'image')
@@ -209,11 +265,12 @@ export function refEditPage(
       <h2>Картинка</h2>
       ${spec.fields
         .filter((f) => f.type === 'image')
-        .map((f) => fieldInput(f, row, families, 0, uploadEntity(spec)))
+        .map((f) => fieldInput(f, row, families, options, uploadEntity(spec)))
         .join('')}
     </section>`
       : ''}
     ${childTable}
+    ${subcategoryTable}
   </div>
   </form>
 ${row
@@ -228,10 +285,14 @@ ${row
   );
 }
 
-/** A model is edited from its family's page, so that is where its editor leads back to. */
-function backLink(spec: RefSpec, row: RefRow | null, familyId: number): string {
+/** A model is edited from its family's page, a subcategory from its category's — the editor leads back there. */
+function backLink(spec: RefSpec, row: RefRow | null, options: RefEditOptions): string {
+  if (spec.table === 'categories') {
+    const parent = row ? Number(row.parent_id) || 0 : (options.parentId ?? 0);
+    if (parent) return `<a class="button" href="/admin/ref/categories/${parent}">К категории</a>`;
+  }
   if (spec.table !== 'models') return `<a class="button" href="/admin/ref/${spec.table}">К списку</a>`;
-  const family = row ? Number(row.family_id) : familyId;
+  const family = row ? Number(row.family_id) : (options.familyId ?? 0);
   const href = family ? `/admin/ref/families/${family}` : '/admin/ref/families';
   return `<a class="button" href="${href}">К семейству</a>`;
 }

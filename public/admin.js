@@ -63,12 +63,17 @@
         .then(function (saved) {
           var uploads = [];
           editor.querySelectorAll('[data-upload]').forEach(function (input) {
-            if (!input.files || !input.files[0]) return;
-            var file = input.files[0];
+            if (!input.files) return;
             var kind = input.getAttribute('data-upload');
-            uploads.push(function () {
-              return putFile(uploadUrl(entity, saved.id, kind, file), file, function (percent) {
-                say(label(kind) + ': ' + percent + '%');
+            // The screenshot picker is `multiple`: every chosen file goes up, one after another.
+            Array.prototype.forEach.call(input.files, function (file, index) {
+              var name = input.files.length > 1
+                ? label(kind) + ' ' + (index + 1) + ' из ' + input.files.length
+                : label(kind);
+              uploads.push(function () {
+                return putFile(uploadUrl(entity, saved.id, kind, file), file, function (percent) {
+                  say(name + ': ' + percent + '%');
+                });
               });
             });
           });
@@ -206,14 +211,15 @@
   // ---------------------------------------------------------------- drag-and-drop order
 
   document.querySelectorAll('table[data-reorder]').forEach(function (table) {
-    var tableName = table.getAttribute('data-reorder');
+    // A reference table saves to /admin/reorder/<table>; anything else names its own address.
+    var saveUrl = table.getAttribute('data-reorder-url') || '/admin/reorder/' + table.getAttribute('data-reorder');
     var tbody = table.querySelector('tbody');
     if (!tbody) return;
     var dragged = null;
 
     function persist() {
       var order = Array.prototype.map.call(tbody.rows, function (row) { return row.getAttribute('data-id'); });
-      fetch('/admin/reorder/' + tableName, {
+      fetch(saveUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
         body: new URLSearchParams({ order: order.join(',') }),
@@ -280,6 +286,29 @@
     };
     familySelect.addEventListener('change', syncGroups);
     syncGroups();
+  }
+
+  // ------------------------------- offer only the subcategories of the chosen category
+
+  var categorySelect = document.querySelector('[data-category-select]');
+  var subcategorySelect = document.querySelector('[data-subcategory-select]');
+  if (categorySelect && subcategorySelect) {
+    var syncSubcategories = function () {
+      var any = false;
+      subcategorySelect.querySelectorAll('optgroup').forEach(function (group) {
+        var mine = group.getAttribute('data-parent') === categorySelect.value;
+        group.hidden = !mine;
+        group.disabled = !mine;
+        if (mine) any = true;
+      });
+      // A choice left over from another category would be dropped by the server anyway.
+      var chosen = subcategorySelect.selectedOptions[0];
+      if (chosen && chosen.parentNode !== subcategorySelect && chosen.parentNode.disabled) subcategorySelect.value = '';
+      // Nothing to choose from: the second level is locked.
+      subcategorySelect.disabled = !any;
+    };
+    categorySelect.addEventListener('change', syncSubcategories);
+    syncSubcategories();
   }
 
   // ------------------------------------------------------------------ confirmations

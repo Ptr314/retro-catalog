@@ -7,5 +7,23 @@
   "corsOrigins": ["https://emu.example.com"],
   "maxScreenshotBytes": 2097152,
   "maxFileBytes": 67108864,
-  "sessionTtlHours": 336
+  "sessionTtlHours": 336,
+  "integrations": {
+    "bk-catalog": {
+      "source": "data/integrations/content.zip",
+      "family": "bk",
+      "emulator": "BK (bk-catalog)",
+      "models": {
+        "БК0010": ["bk-0010"],
+        "БК0010 ФОКАЛ": ["bk-0010"],
+        "БК0010-01": ["bk-0010-01"],
+        "БК0010-01 БЕЙСИК": ["bk-0010-01"],
+        "БК0010 (11М)": ["bk-0010", "bk-0011m"],
+        "БК0011 БЕЙСИК": ["bk-0011"],
+        "БК0011 ФОКАЛ": ["bk-0011"],
+        "БК0011М": ["bk-0011m"],
+        "БК0011М + СМК512": ["bk-0011m"]
+      }
+    }
+  }
 }

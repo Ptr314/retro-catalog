@@ -19,7 +19,9 @@ import {
   noteLoginSuccess, sameOrigin, startSession, verifyPassword,
 } from './auth.ts';
 import { markdownExcerpt, renderMarkdown } from './markdown.ts';
+import { parseMetadata } from './metadata.ts';
 import { refSpec } from './refs.ts';
+import type { RefSpec } from './refs.ts';
 import { isReservedSlug } from './reserved.ts';
 import { errorPage } from './views/layout.ts';
 import { catalogPage } from './views/catalog.ts';
@@ -29,9 +31,14 @@ import { familyHeader } from './views/family.ts';
 import { programPage } from './views/program.ts';
 import { adminListPage, editPage, loginPage, passwordPage } from './views/admin.ts';
 import { refEditPage, refListPage } from './views/admin-refs.ts';
+import type { RefEditOptions } from './views/admin-refs.ts';
+import { programUrl } from './views/parts.ts';
 import { userEditPage, userListPage } from './views/admin-users.ts';
 
 const publicDir = join(rootDir, 'public');
+
+/** Per program. The importer brings up to a dozen; this only stops a runaway upload loop. */
+const MAX_SCREENSHOTS = 40;
 
 type Ctx = {
   req: IncomingMessage;
@@ -81,20 +88,12 @@ route('GET', '/catalog', (ctx) => {
   });
 });
 
+// The program page lives at /<family>/<slug> (see sealRoutes). This is its old address,
+// kept so that existing links survive; slugs are unique across families, so it resolves.
 route('GET', '/p/:slug', (ctx) => {
   const program = db.getProgramBySlug(ctx.params.slug);
   if (!program || (!program.published && !ctx.user)) return notFound(ctx);
-  html(
-    ctx.res,
-    200,
-    programPage(
-      program,
-      db.getFamilyById(program.family_id),
-      db.modelsForProgram(program.id),
-      db.emulatorFilesFor([program.id]).get(program.id) ?? [],
-      Boolean(ctx.user),
-    ),
-  );
+  redirect(ctx.res, programUrl(program), 301);
 });
 
 route('GET', '/dl/:slug', async (ctx) => {
@@ -116,7 +115,7 @@ route('GET', '/run/:slug/:emu', (ctx) => {
   if (!program || (!program.published && !ctx.user)) return notFound(ctx);
   const slot = db.getEmulatorFile(program.id, Number(ctx.params.emu));
   if (!slot) return notFound(ctx);
-  const launchUrl = launchUrlFor(slot);
+  const launchUrl = launchUrlFor(slot, program);
   if (!launchUrl) return notFound(ctx);
   if (!ctx.user) db.bumpRuns(program.id, slot.emulator_id);
   // 302, never 301: a cached permanent redirect would freeze the counter.
@@ -194,9 +193,13 @@ route('GET', '/admin', (ctx) => {
   const q = (ctx.url.searchParams.get('q') ?? '').trim().slice(0, 100);
   const page = Number(ctx.url.searchParams.get('page')) || 1;
   const familyId = Number(ctx.url.searchParams.get('family')) || 0;
-  const result = db.listPrograms({ q, familyId: familyId || null, page, perPage: 50, includeHidden: true, sort: 'new' });
+  const missingOnly = ctx.url.searchParams.get('missing') === '1';
+  const result = db.listPrograms({
+    q, familyId: familyId || null, missingOnly, page, perPage: 50, includeHidden: true, sort: 'new',
+  });
   html(ctx.res, 200, adminListPage(
     ctx.user!, result.rows, result.total, result.page, result.pages, q, db.stats(), db.listFamilies(), familyId,
+    missingOnly,
   ));
 }, true);
 
@@ -247,7 +250,18 @@ route('POST', '/admin/save', async (ctx) => {
     emulatorUrls.set(emulator.id, url);
   }
 
+  // One column, two levels: the subcategory when it really belongs to the chosen category
+  // (a JS-less form can send a stale pair), otherwise the category itself.
   const categoryId = Number(form.get('category_id')) || 0;
+  const subcategoryId = Number(form.get('subcategory_id')) || 0;
+  const subcategory = subcategoryId ? db.getRef('categories', subcategoryId) : null;
+  const savedCategoryId =
+    subcategory && Number(subcategory.parent_id) === categoryId
+      ? subcategoryId
+      : categoryId && db.getRef('categories', categoryId)
+        ? categoryId
+        : null;
+
   // Only models of the chosen family may be attached.
   const familyModels = new Set(db.listModels(familyId).map((m) => m.id));
   const modelIds = form
@@ -259,13 +273,16 @@ route('POST', '/admin/save', async (ctx) => {
     slug: uniqueSlug((form.get('slug') ?? '').trim() || slugify(title) || `program-${Date.now()}`, id),
     title: title.slice(0, 200),
     family_id: familyId,
-    category_id: categoryId && db.getRef('categories', categoryId) ? categoryId : null,
+    category_id: savedCategoryId,
     year: Number(form.get('year')) || null,
     author: (form.get('author') ?? '').trim().slice(0, 120),
     author_wanted: form.get('author_wanted') ? 1 : 0,
     promoted: form.get('promoted') ? 1 : 0,
     source_url: sourceUrl,
     description: (form.get('description') ?? '').trim().slice(0, 20000),
+    graphics: (form.get('graphics') ?? '').trim().slice(0, 200),
+    music: (form.get('music') ?? '').trim().slice(0, 200),
+    metadata: (form.get('metadata') ?? '').trim().slice(0, 20000),
     published: form.get('published') ? 1 : 0,
   };
 
@@ -276,6 +293,7 @@ route('POST', '/admin/save', async (ctx) => {
     savedId = db.createProgram(input, modelIds);
   }
   for (const [emulatorId, url] of emulatorUrls) db.setEmulatorUrl(savedId, emulatorId, url);
+  if (form.get('clear_missing')) db.clearMissing(savedId);
 
   if (wantsJson) return json(ctx.res, 200, { id: savedId, slug: input.slug, family_id: familyId });
   // Back to the family's list, where the program was most likely picked from.
@@ -285,7 +303,9 @@ route('POST', '/admin/save', async (ctx) => {
 route('POST', '/admin/delete/:id', async (ctx) => {
   const program = db.getProgramById(Number(ctx.params.id));
   if (!program) return notFound(ctx);
-  if (program.screenshot) await unlink(join(screenshotsDir, program.screenshot)).catch(() => {});
+  for (const shot of db.listScreenshots(program.id)) {
+    await unlink(join(screenshotsDir, shot.file_name)).catch(() => {});
+  }
   if (program.file_name) await unlink(join(filesDir, program.file_name)).catch(() => {});
   // SQLite drops the rows; the files behind them are ours to remove.
   for (const name of db.programFileNames(program.id)) {
@@ -337,6 +357,24 @@ route('POST', '/admin/clear/program/:id/emu/:emu', async (ctx) => {
   json(ctx.res, 200, { ok: true });
 }, true);
 
+/** One screenshot out of a program's strip; the next one in order becomes the cover. */
+route('POST', '/admin/clear/program/:id/shot/:shot', async (ctx) => {
+  const shot = db.getScreenshot(Number(ctx.params.shot));
+  if (!shot || Number(shot.program_id) !== Number(ctx.params.id)) return json(ctx.res, 404, { error: 'Не найдено' });
+  await unlink(join(screenshotsDir, shot.file_name)).catch(() => {});
+  db.deleteScreenshot(shot.id);
+  json(ctx.res, 200, { ok: true });
+}, true);
+
+route('POST', '/admin/reorder-shots/:id', async (ctx) => {
+  const program = db.getProgramById(Number(ctx.params.id));
+  if (!program) return json(ctx.res, 404, { error: 'Не найдено' });
+  const ids = orderFromForm(await readForm(ctx.req, 64 * 1024));
+  if (ids.length === 0) return json(ctx.res, 400, { error: 'Пустой порядок' });
+  db.setScreenshotOrder(program.id, ids);
+  json(ctx.res, 200, { ok: true });
+}, true);
+
 /** entity/kind pairs the uploader accepts. The body is the raw file. */
 route('PUT', '/admin/upload/:entity/:id/:kind', async (ctx) => {
   const { entity, kind } = ctx.params;
@@ -345,9 +383,13 @@ route('PUT', '/admin/upload/:entity/:id/:kind', async (ctx) => {
   if (entity === 'program' && kind === 'screenshot') {
     const program = db.getProgramById(id);
     if (!program) return json(ctx.res, 404, { error: 'Не найдено' });
-    const saved = await saveImage(ctx, `p${id}`, program.screenshot);
+    if (db.listScreenshots(id).length >= MAX_SCREENSHOTS) {
+      return json(ctx.res, 400, { error: `У программы уже ${MAX_SCREENSHOTS} скриншотов` });
+    }
+    // Added to the strip, never replacing: '' means there is no previous file to remove.
+    const saved = await saveImage(ctx, `p${id}`, '');
     if (!saved) return;
-    db.setScreenshot(id, saved);
+    db.addScreenshot(id, saved);
     return json(ctx.res, 200, { name: saved, url: `/screenshots/${saved}` });
   }
 
@@ -388,10 +430,7 @@ route('POST', '/admin/clear/:entity/:id/:kind', async (ctx) => {
   if (entity === 'program') {
     const program = db.getProgramById(id);
     if (!program) return json(ctx.res, 404, { error: 'Не найдено' });
-    if (kind === 'screenshot' && program.screenshot) {
-      await unlink(join(screenshotsDir, program.screenshot)).catch(() => {});
-      db.setScreenshot(id, '');
-    } else if (kind === 'file' && program.file_name) {
+    if (kind === 'file' && program.file_name) {
       await unlink(join(filesDir, program.file_name)).catch(() => {});
       db.setFile(id, '', null);
     }
@@ -415,15 +454,19 @@ route('POST', '/admin/clear/:entity/:id/:kind', async (ctx) => {
 route('GET', '/admin/ref/:table', (ctx) => {
   const spec = refSpec(ctx.params.table);
   if (!spec) return notFound(ctx);
-  const rows = db.listRef(spec.table);
-  html(ctx.res, 200, refListPage(ctx.user!, spec, rows, db.listFamilies(), refCounts(spec.table, rows)));
+  renderRefList(ctx, spec, 200);
 }, true);
 
 route('GET', '/admin/ref/:table/new', (ctx) => {
   const spec = refSpec(ctx.params.table);
   if (!spec) return notFound(ctx);
   const familyId = Number(ctx.url.searchParams.get('family_id')) || 0;
-  html(ctx.res, 200, refEditPage(ctx.user!, spec, null, db.listFamilies(), { familyId }));
+  const parentId = Number(ctx.url.searchParams.get('parent_id')) || 0;
+  html(ctx.res, 200, refEditPage(ctx.user!, spec, null, db.listFamilies(), {
+    ...refEditExtras(spec.table, 0),
+    familyId,
+    parentId,
+  }));
 }, true);
 
 route('GET', '/admin/ref/:table/:id', (ctx) => {
@@ -446,6 +489,7 @@ route('POST', '/admin/ref/:table/save', async (ctx) => {
     return html(ctx.res, 400, refEditPage(ctx.user!, spec, row, db.listFamilies(), {
       ...refEditExtras(spec.table, id),
       familyId: Number(form.get('family_id')) || 0,
+      parentId: Number(form.get('parent_id')) || 0,
       error,
     }));
   }
@@ -459,10 +503,13 @@ route('POST', '/admin/ref/:table/save', async (ctx) => {
   }
   // A renamed family, model or category changes what the search haystack should contain.
   db.rebuildSearchText();
-  // A model is edited from its family's page, so saving returns there.
+  // A model is edited from its family's page and a subcategory from its category's,
+  // so saving returns there.
   redirect(ctx.res, spec.table === 'models'
     ? `/admin/ref/families/${values.family_id}`
-    : `/admin/ref/${spec.table}/${savedId}`);
+    : spec.table === 'categories' && values.parent_id
+      ? `/admin/ref/categories/${values.parent_id}`
+      : `/admin/ref/${spec.table}/${savedId}`);
 }, true);
 
 route('POST', '/admin/ref/:table/delete/:id', async (ctx) => {
@@ -473,10 +520,7 @@ route('POST', '/admin/ref/:table/delete/:id', async (ctx) => {
   if (!row) return notFound(ctx);
 
   const refusal = spec.beforeDelete(id);
-  if (refusal) {
-    const rows = db.listRef(spec.table);
-    return html(ctx.res, 409, refListPage(ctx.user!, spec, rows, db.listFamilies(), refCounts(spec.table, rows), '', refusal));
-  }
+  if (refusal) return renderRefList(ctx, spec, 409, refusal);
 
   // Files first: the rows that name them are about to disappear.
   if (spec.table === 'emulators') {
@@ -491,17 +535,15 @@ route('POST', '/admin/ref/:table/delete/:id', async (ctx) => {
 
   db.deleteRef(spec.table, id);
   db.rebuildSearchText();
-  redirect(ctx.res, `/admin/ref/${spec.table}`);
+  redirect(ctx.res, spec.table === 'categories' && row.parent_id
+    ? `/admin/ref/categories/${row.parent_id}`
+    : `/admin/ref/${spec.table}`);
 }, true);
 
 route('POST', '/admin/reorder/:table', async (ctx) => {
   const spec = refSpec(ctx.params.table);
   if (!spec || !spec.reorderable) return json(ctx.res, 404, { error: 'Нельзя менять порядок' });
-  const form = await readForm(ctx.req, 64 * 1024);
-  const ids = (form.get('order') ?? '')
-    .split(',')
-    .map((value) => Number(value))
-    .filter((id) => Number.isInteger(id) && id > 0);
+  const ids = orderFromForm(await readForm(ctx.req, 64 * 1024));
   if (ids.length === 0) return json(ctx.res, 400, { error: 'Пустой порядок' });
   db.setSortOrder(spec.table, ids);
   json(ctx.res, 200, { ok: true });
@@ -601,7 +643,15 @@ function sealRoutes(): void {
     const family = familyFromPath(ctx, ctx.params.family);
     if (!family) return notFound(ctx);
     const model = db.getModelBySlug(family.id, ctx.params.model);
-    if (!model) return notFound(ctx);
+    if (!model) {
+      // Not a model: the second segment is a program's slug. A model of the same name
+      // would have won above, which is why db.slugTaken() keeps the two apart.
+      const program = db.getProgramBySlug(ctx.params.model);
+      if (!program || (!program.published && !ctx.user)) return notFound(ctx);
+      // Reached under another family (it was moved, or the link was mistyped): one canonical address.
+      if (program.family_id !== family.id) return redirect(ctx.res, programUrl(program), 301);
+      return showProgram(ctx, program);
+    }
     const query = { ...readQuery(ctx), familyId: family.id, modelId: model.id };
     renderCatalog(ctx, query, {
       basePath: `/${family.slug}/${model.slug}`,
@@ -625,13 +675,34 @@ function familyFromPath(ctx: Ctx, slug: string): db.Family | null {
 
 // ------------------------------------------------------------------ helpers
 
+function showProgram(ctx: Ctx, program: ProgramRow): void {
+  html(
+    ctx.res,
+    200,
+    programPage(
+      program,
+      db.getFamilyById(program.family_id),
+      db.modelsForProgram(program.id),
+      db.emulatorFilesFor([program.id]).get(program.id) ?? [],
+      db.listScreenshots(program.id),
+      Boolean(ctx.user),
+    ),
+  );
+}
+
 function readQuery(ctx: Ctx): ListQuery {
   const p = ctx.url.searchParams;
+  const categoryId = Number(p.get('category')) || null;
+  // A subcategory only counts under its own category. Without JavaScript the form can
+  // send a pair left over from the previous choice; the stale half is dropped here.
+  const subcategoryId = Number(p.get('subcategory')) || null;
+  const subcategory = categoryId && subcategoryId ? db.getRef('categories', subcategoryId) : null;
   return {
     q: (p.get('q') ?? '').trim().slice(0, 100),
     familyId: Number(p.get('family')) || null,
     modelId: Number(p.get('model')) || null,
-    categoryId: Number(p.get('category')) || null,
+    categoryId,
+    subcategoryId: subcategory && Number(subcategory.parent_id) === categoryId ? subcategoryId : null,
     year: Number(p.get('year')) || null,
     sort: p.get('sort') ?? 'new',
   };
@@ -660,7 +731,7 @@ function renderCatalog(ctx: Ctx, query: ListQuery, catalogCtx: CatalogContext): 
       page: result.page,
       pages: result.pages,
       q: query,
-      facets: db.facets(query.familyId),
+      facets: db.facets(query.familyId, query.categoryId),
       families: db.listFamilies(),
       slots: db.emulatorFilesFor(result.rows.map((row) => row.id)),
       ctx: catalogCtx,
@@ -673,6 +744,7 @@ function editData(program: ProgramRow | null) {
   return {
     families: db.listFamilies(),
     categories: db.listCategories(),
+    screenshots: program ? db.listScreenshots(program.id) : [],
     models: db.listModels(),
     emulators: db.listEmulators(),
     emulatorFiles: program ? (db.emulatorFilesFor([program.id]).get(program.id) ?? []) : [],
@@ -694,13 +766,40 @@ function refCounts(table: RefTable, rows: db.RefRow[]): Map<number, number> {
   return counts;
 }
 
-function refEditExtras(table: RefTable, id: number): { childModels?: db.RefRow[]; programCount?: number } {
+/** id 0 = a row that does not exist yet. */
+function refEditExtras(table: RefTable, id: number): RefEditOptions {
   if (table === 'families') {
-    return { childModels: db.listRef('models', id) as unknown as db.RefRow[], programCount: db.countProgramsInFamily(id) };
+    return { childModels: id ? db.listRef('models', id) : undefined, programCount: db.countProgramsInFamily(id) };
   }
   if (table === 'models') return { programCount: db.countProgramsWithModel(id) };
   if (table === 'emulators') return { programCount: db.countProgramsWithEmulator(id) };
-  return {};
+  // Categories: the list of possible parents, and — for a top-level one — its subcategories.
+  const row = id ? db.getRef('categories', id) : null;
+  return {
+    parents: db.listRef('categories').filter((c) => !c.parent_id),
+    childCategories: row && !row.parent_id ? db.listRef('categories', id) : undefined,
+  };
+}
+
+/** The list page of a reference table. Categories list their top level; subcategories live on the category's page. */
+function renderRefList(ctx: Ctx, spec: RefSpec, status: number, error = ''): void {
+  const all = db.listRef(spec.table);
+  const isCategories = spec.table === 'categories';
+  const rows = isCategories ? all.filter((row) => !row.parent_id) : all;
+  const childCounts = isCategories
+    ? new Map(rows.map((row) => [Number(row.id), all.filter((c) => Number(c.parent_id) === Number(row.id)).length]))
+    : null;
+  html(ctx.res, status, refListPage(
+    ctx.user!, spec, rows, db.listFamilies(), refCounts(spec.table, rows), '', error, childCounts,
+  ));
+}
+
+/** "3,1,2" from a drag-and-drop save. */
+function orderFromForm(form: URLSearchParams): number[] {
+  return (form.get('order') ?? '')
+    .split(',')
+    .map((value) => Number(value))
+    .filter((id) => Number.isInteger(id) && id > 0);
 }
 
 /** Reads the body as an image, stores it, removes the previous one. Answers on failure. */
@@ -738,25 +837,38 @@ function httpUrl(value: string | null): string | null {
 
 /**
  * Where «Запустить» goes. The two sources are not the same kind of thing: an uploaded
- * file is a package, handed to the emulator through its {url} template, while a typed
+ * file is a package, handed to the emulator through its template, while a typed
  * address is already a finished launch page and is opened exactly as written.
  * An uploaded file wins; '' means the slot cannot launch anything.
  */
-function launchUrlFor(slot: db.EmulatorFile): string {
-  if (slot.file_name) return emulatorLaunchUrl(slot.url_template, `${config.siteUrl}/files/${slot.file_name}`);
+function launchUrlFor(slot: db.EmulatorFile, program: ProgramRow): string {
+  if (slot.file_name) {
+    return emulatorLaunchUrl(slot.url_template, `${config.siteUrl}/files/${slot.file_name}`, program.metadata);
+  }
   return slot.file_url;
 }
 
-/** The emulator downloads the package itself, so the template gets an absolute URL. */
-function emulatorLaunchUrl(template: string, fileUrl: string): string {
-  return template.replaceAll('{url}', encodeURIComponent(fileUrl));
+/**
+ * The emulator downloads the package itself, so the template gets an absolute URL:
+ *   {url}       the address, encoded for a query string;
+ *   {rawurl}    the address as it is — for emulators that pass the parameter to
+ *               XMLHttpRequest without decoding it (an encoded "https%3A%2F%2F…" would
+ *               be taken for a relative path); stored names hold nothing that needs escaping;
+ *   {meta:key}  a value from the program's metadata, encoded; empty when the key is absent.
+ */
+function emulatorLaunchUrl(template: string, fileUrl: string, metadata: string): string {
+  const meta = parseMetadata(metadata);
+  return template
+    .replace(/\{meta:([^{}]+)}/g, (_match, key: string) => encodeURIComponent(meta.get(key.trim().toLowerCase()) ?? ''))
+    .replaceAll('{rawurl}', fileUrl)
+    .replaceAll('{url}', encodeURIComponent(fileUrl));
 }
 
 function uniqueSlug(candidate: string, exceptId: number): string {
   const base = slugify(candidate) || `program-${Date.now()}`;
   let slug = base;
   let n = 2;
-  while (db.slugExists(slug, exceptId)) slug = `${base}-${n++}`;
+  while (db.slugTaken(slug, exceptId)) slug = `${base}-${n++}`;
   return slug;
 }
 

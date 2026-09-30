@@ -155,6 +155,8 @@ select {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M0 0h12L6 8z' fill='%23ffb000'/%3E%3C/svg%3E");
   background-repeat: no-repeat; background-position: right .65rem center;
 }
+/* a locked control: the second-level category list while its category has no subcategories */
+select:disabled { cursor: not-allowed; color: var(--muted); border-style: dashed; opacity: .6; }
 input[type="file"] { padding: .35rem; background: transparent; border-style: dashed; max-width: 100%; }
 input[type="file"]::file-selector-button {
   font: inherit; color: var(--accent); background: transparent;
@@ -242,6 +244,32 @@ button:active, .button:active { transform: translate(2px, 2px); }
   100% { transform: none; }
 }
 .shot-big { animation: tube-on .45s cubic-bezier(.2, .8, .3, 1) both; }
+
+/*
+ * Several screenshots in one tube: a strip that scrolls sideways a frame at a time.
+ * It is a plain scroll container, so swipe and scrollbar work with no script; shots.js
+ * adds the two keys and, once it has, the scrollbar goes. The tube warms up once, as a
+ * whole: the animation sits on the strip, not on a frame — a frame mid-transform would
+ * move its own snap point and leave the strip resting off the first picture.
+ */
+.shots {
+  display: flex; overflow-x: auto; overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory; border-radius: var(--tube);
+  scrollbar-width: thin; scrollbar-color: var(--line) var(--ink);
+  animation: tube-on .45s cubic-bezier(.2, .8, .3, 1) both;
+}
+.shots.shots-js { scrollbar-width: none; }
+.shots.shots-js::-webkit-scrollbar { display: none; }
+.shots > .shot-big { flex: 0 0 100%; scroll-snap-align: start; border-radius: 0; animation: none; }
+/* keys on the bezel's edge, above the glare layer; each is hidden when there is nowhere to go */
+.shots-nav {
+  position: absolute; top: 50%; z-index: 2; margin-top: -1.4rem;
+  width: 2.2rem; height: 2.8rem; padding: 0 0 .2rem;
+  font-size: 1.6rem; line-height: 1; background: var(--ink);
+}
+.shots-prev { left: 0; }
+.shots-next { right: 0; }
+.shots-nav[hidden] { display: none; }
 
 /* ----------------------------------------------------------------- catalog */
 
@@ -419,8 +447,8 @@ a.chip:hover { border-color: var(--accent); color: var(--accent); text-decoratio
 .badge::before { content: ""; width: .55rem; height: .55rem; border-radius: 50%; background: var(--line); flex: none; }
 .badge.ok { color: var(--text); }
 .badge.ok::before { background: var(--accent); box-shadow: var(--glow-amber); }
-.badge.wanted { color: var(--hot); }
-.badge.wanted::before { background: var(--hot); box-shadow: var(--glow-hot); }
+.badge.wanted, .badge.lost { color: var(--hot); }
+.badge.wanted::before, .badge.lost::before { background: var(--hot); box-shadow: var(--glow-hot); }
 
 /* "Author wanted" with a note behind it: underlined, ends with an i-mark, and opens
    the family's note on hover or keyboard focus. No script involved. */
@@ -466,6 +494,9 @@ a.chip:hover { border-color: var(--accent); color: var(--accent); text-decoratio
 .preview { width: 100%; max-height: 220px; object-fit: contain; image-rendering: pixelated; background: #000; border-radius: var(--tube); border: .4rem solid var(--ink); }
 .preview-empty { height: 120px; background: var(--ink); border: 2px dashed var(--line); border-radius: var(--tube); }
 .current-file { margin: 0; word-break: break-all; }
+.shots-table .reorder-col { width: 5.5rem; }
+.integration { border-top: 1px dashed var(--line); padding-top: .7rem; }
+.integration p { margin: 0 0 .4rem; }
 .save-status { color: var(--accent); font-size: .92rem; font-weight: 500; min-height: 1.4rem; margin: 0 0 .5rem; }
 .save-status.error { color: var(--danger); }
 .danger-zone { margin-top: 2rem; padding-top: 1.2rem; border-top: 2px solid var(--line); }
@@ -509,6 +540,6 @@ a.chip:hover { border-color: var(--accent); color: var(--accent); text-decoratio
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .home-title::after, .shot-big { animation: none; }
+  .home-title::after, .shot-big, .shots { animation: none; }
   button, .button, .card { transition: none; }
 }

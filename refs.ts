@@ -10,7 +10,7 @@ import type { RefRow, RefTable } from './db.ts';
 import { slugify } from './http.ts';
 import { isReservedSlug } from './reserved.ts';
 
-export type RefFieldType = 'text' | 'slug' | 'markdown' | 'image' | 'years' | 'family';
+export type RefFieldType = 'text' | 'slug' | 'markdown' | 'image' | 'years' | 'family' | 'parent';
 
 export type RefField = {
   /** Column name; also the form field name. */
@@ -58,7 +58,12 @@ function uniqueRefSlug(
   const base = slugify(raw) || slugify(fallback) || `${table === 'families' ? 'family' : 'model'}-${Date.now()}`;
   let slug = base;
   let n = 2;
-  while ((table === 'families' && isReservedSlug(slug)) || db.refSlugExists(table, slug, familyId, exceptId)) {
+  // A model shares /<family>/<slug> with program pages, so a program's slug is taken too.
+  while (
+    (table === 'families' && isReservedSlug(slug)) ||
+    (table === 'models' && db.slugExists(slug)) ||
+    db.refSlugExists(table, slug, familyId, exceptId)
+  ) {
     slug = `${base}-${n}`;
     n += 1;
   }
@@ -146,6 +151,8 @@ const models: RefSpec = {
     if (typed && db.refSlugExists('models', typed, familyId, id)) {
       return `Адрес «${typed}» уже занят другой моделью этого семейства.`;
     }
+    // The model page would shadow the program's: both live at /<family>/<slug>.
+    if (typed && db.slugExists(typed)) return `Адрес «${typed}» уже занят программой.`;
     return '';
   },
   values(form, id) {
@@ -181,14 +188,19 @@ const emulators: RefSpec = {
       required: true,
       maxLength: 500,
       placeholder: 'https://emu.example.com/?machine=agat9&url={url}',
-      hint: 'Вместо {url} подставится адрес файла программы. Эмулятор скачивает файл сам.',
+      hint:
+        'Вместо {url} подставится адрес файла программы, закодированный для строки запроса; {rawurl} — тот же ' +
+        'адрес как есть, для эмуляторов, которые не декодируют параметр; {meta:ключ} — значение из метаданных ' +
+        'программы (пусто, если ключа нет). Эмулятор скачивает файл сам.',
     },
   ],
   validate(form) {
     if (!str(form, 'name')) return 'Название обязательно.';
     const template = str(form, 'url_template', 500);
     if (!template) return 'URL запуска обязателен.';
-    if (!template.includes('{url}')) return 'В шаблоне нет {url} — эмулятору некуда подставить ссылку на файл.';
+    if (!template.includes('{url}') && !template.includes('{rawurl}')) {
+      return 'В шаблоне нет {url} или {rawurl} — эмулятору некуда подставить ссылку на файл.';
+    }
     try {
       const url = new URL(template);
       if (url.protocol !== 'http:' && url.protocol !== 'https:') return 'Шаблон должен быть http(s)-адресом.';
@@ -213,20 +225,51 @@ const categories: RefSpec = {
   reorderable: true,
   scopedToFamily: false,
   listFields: ['name'],
-  fields: [{ name: 'name', label: 'Название категории', type: 'text', required: true, maxLength: 120 }],
+  fields: [
+    {
+      name: 'parent_id',
+      label: 'Входит в категорию',
+      type: 'parent',
+      hint: 'Уровней два: категория и её подкатегории (например, «Игра» и жанры).',
+    },
+    { name: 'name', label: 'Название', type: 'text', required: true, maxLength: 120 },
+  ],
   validate(form, id) {
     const name = str(form, 'name', 120);
     if (!name) return 'Название обязательно.';
+
+    const parentId = Number(form.get('parent_id')) || 0;
+    if (parentId) {
+      const parent = db.getRef('categories', parentId);
+      if (!parent || parentId === id) return 'Выберите категорию верхнего уровня.';
+      // Two levels and no more: a parent is always top-level, and so is anything with children.
+      if (parent.parent_id) return `«${parent.name}» сама подкатегория — вложить в неё нельзя.`;
+      if (id && db.countSubcategories(id) > 0) {
+        return 'У этой категории есть подкатегории — сделать подкатегорией её саму нельзя.';
+      }
+    }
+
+    // Names repeat across parents ("Демо" the category, "Демо" the game genre), not inside one.
     const existing = db
       .listRef('categories')
-      .find((row) => String(row.name).toLowerCase() === name.toLowerCase() && Number(row.id) !== id);
-    return existing ? `Категория «${name}» уже есть.` : '';
+      .find(
+        (row) =>
+          String(row.name).toLowerCase() === name.toLowerCase() &&
+          Number(row.id) !== id &&
+          (Number(row.parent_id) || 0) === parentId,
+      );
+    if (!existing) return '';
+    return parentId ? `Подкатегория «${name}» здесь уже есть.` : `Категория «${name}» уже есть.`;
   },
   values(form) {
-    return { name: str(form, 'name', 120) };
+    return { parent_id: Number(form.get('parent_id')) || null, name: str(form, 'name', 120) };
   },
-  beforeDelete() {
-    return '';
+  beforeDelete(id) {
+    const children = db.countSubcategories(id);
+    // ON DELETE RESTRICT would raise a raw SQLite error; say it in Russian first.
+    return children > 0
+      ? `В категории ${children} ${plural(children, 'подкатегория', 'подкатегории', 'подкатегорий')} — сначала удалите или перенесите их.`
+      : '';
   },
 };
 

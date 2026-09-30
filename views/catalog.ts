@@ -6,13 +6,15 @@ import type { EmulatorFile, Facets, Family, Model, ProgramRow } from '../db.ts';
 import { escapeHtml, formatBytes } from '../http.ts';
 import { firstParagraph } from '../markdown.ts';
 import { layout } from './layout.ts';
-import { imageTag, mdDetails, pager, plural, viewToggle, wantedBadge } from './parts.ts';
+import { categoryLabel, imageTag, mdDetails, pager, plural, programUrl, viewToggle, wantedBadge } from './parts.ts';
 
 export type ListQuery = {
   q: string;
   familyId: number | null;
   modelId: number | null;
   categoryId: number | null;
+  /** Only ever a child of categoryId: server.ts#readQuery drops a pair that does not match. */
+  subcategoryId: number | null;
   year: number | null;
   sort: string;
 };
@@ -58,6 +60,7 @@ export function queryString(
     family: q.familyId,
     model: q.modelId,
     category: q.categoryId,
+    subcategory: q.subcategoryId,
     year: q.year,
     sort: q.sort === 'new' ? null : q.sort,
     ...overrides,
@@ -104,11 +107,12 @@ function actions(p: ProgramRow, slots: EmulatorFile[], compact = false): string 
 }
 
 function tile(p: ProgramRow, slots: EmulatorFile[]): string {
-  const meta = [p.family_name, p.category_name ?? '', p.year ? String(p.year) : ''].filter(Boolean).join(' · ');
+  const meta = [p.family_name, categoryLabel(p), p.year ? String(p.year) : ''].filter(Boolean).join(' · ');
+  const href = escapeHtml(programUrl(p));
   return `<article class="card">
-  <a class="card-shot" href="/p/${escapeHtml(p.slug)}">${imageTag(p.screenshot, `Скриншот: ${p.title}`, 'shot', p.family_name)}</a>
+  <a class="card-shot" href="${href}">${imageTag(p.screenshot, `Скриншот: ${p.title}`, 'shot', p.family_name)}</a>
   <div class="card-body">
-    <h3><a href="/p/${escapeHtml(p.slug)}">${escapeHtml(p.title)}</a></h3>
+    <h3><a href="${href}">${escapeHtml(p.title)}</a></h3>
     <p class="card-meta">${escapeHtml(meta)}</p>
     ${p.author ? `<p class="card-author">${escapeHtml(p.author)}</p>` : ''}
     ${p.author_wanted ? wantedBadge('разыскивается автор', p.family_wanted_note) : ''}
@@ -118,11 +122,12 @@ function tile(p: ProgramRow, slots: EmulatorFile[]): string {
 }
 
 function tableRow(p: ProgramRow, slots: EmulatorFile[]): string {
-  const meta = [p.family_name, p.category_name ?? ''].filter(Boolean).join(' · ');
+  const meta = [p.family_name, categoryLabel(p)].filter(Boolean).join(' · ');
+  const href = escapeHtml(programUrl(p));
   return `<tr>
-  <td class="thumb"><a href="/p/${escapeHtml(p.slug)}">${imageTag(p.screenshot, `Скриншот: ${p.title}`, 'shot-small', p.family_name)}</a></td>
+  <td class="thumb"><a href="${href}">${imageTag(p.screenshot, `Скриншот: ${p.title}`, 'shot-small', p.family_name)}</a></td>
   <td>
-    <a class="row-title" href="/p/${escapeHtml(p.slug)}">${escapeHtml(p.title)}</a>
+    <a class="row-title" href="${href}">${escapeHtml(p.title)}</a>
     <p class="card-meta">${escapeHtml(meta)}</p>
     ${p.author_wanted ? wantedBadge('разыскивается автор', p.family_wanted_note) : ''}
   </td>
@@ -143,6 +148,7 @@ export function catalogBody(v: CatalogView): string {
   ${ctx.family ? '' : `<select name="family" aria-label="Семейство">${idOptions(v.families, q.familyId, 'Все семейства')}</select>`}
   ${ctx.model ? '' : `<select name="model" aria-label="Модель">${idOptions(facets.models, q.modelId, 'Все модели')}</select>`}
   <select name="category" aria-label="Категория">${idOptions(facets.categories, q.categoryId, 'Все категории')}</select>
+  <select name="subcategory" aria-label="Подкатегория"${facets.subcategories.length ? '' : ' disabled'}>${idOptions(facets.subcategories, q.subcategoryId, 'Все подкатегории')}</select>
   <select name="year" aria-label="Год">
     <option value="">Все годы</option>
     ${facets.years.map((y) => `<option value="${y}"${q.year === y ? ' selected' : ''}>${y}</option>`).join('')}

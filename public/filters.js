@@ -4,11 +4,14 @@
 
   document.querySelectorAll('form[data-autosubmit]').forEach(function (form) {
     var model = form.querySelector('select[name="model"]');
+    var subcategory = form.querySelector('select[name="subcategory"]');
     form.addEventListener('change', function (e) {
       var target = e.target;
       if (!(target instanceof HTMLSelectElement)) return;
       // Another family has other models: a model left over from the old one would match nothing.
       if (target.name === 'family' && model) model.value = '';
+      // Likewise a subcategory belongs to one category only.
+      if (target.name === 'category' && subcategory) subcategory.value = '';
       form.requestSubmit();
     });
 

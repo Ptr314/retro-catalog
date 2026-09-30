@@ -1,8 +1,8 @@
 import { config } from '../config.ts';
-import type { Category, Emulator, EmulatorFile, Family, Model, ProgramRow, Stats, User } from '../db.ts';
+import type { Category, Emulator, EmulatorFile, Family, Model, ProgramRow, Screenshot, Stats, User } from '../db.ts';
 import { escapeHtml, formatBytes } from '../http.ts';
 import { layout } from './layout.ts';
-import { alerts, imageUrl, mdEditor, pager, plural } from './parts.ts';
+import { alerts, categoryLabel, imageUrl, mdEditor, pager, plural, programUrl } from './parts.ts';
 
 export const adminName = (user: User): string => user.display_name || user.username;
 
@@ -60,9 +60,17 @@ export function adminListPage(
   stats: Stats,
   families: Family[],
   familyId: number,
+  missingOnly = false,
 ): string {
   const href = (n: number): string =>
-    `/admin?page=${n}${familyId ? `&family=${familyId}` : ''}${q ? `&q=${encodeURIComponent(q)}` : ''}`;
+    `/admin?page=${n}${familyId ? `&family=${familyId}` : ''}${missingOnly ? '&missing=1' : ''}${
+      q ? `&q=${encodeURIComponent(q)}` : ''
+    }`;
+  // Rows an importer stopped finding in its source: it unpublishes them and leaves the rest to a person.
+  const missingFilter = `<select name="missing" aria-label="Источник">
+      <option value="">все записи</option>
+      <option value="1"${missingOnly ? ' selected' : ''}>нет в источнике</option>
+    </select>`;
   const familyFilter = `<select name="family" aria-label="Семейство">
       <option value="">все семейства</option>
       ${families
@@ -85,6 +93,7 @@ export function adminListPage(
   </ul>
   <form class="filters" method="get" action="/admin" data-autosubmit>
     ${familyFilter}
+    ${missingFilter}
     <input class="search" type="search" name="q" value="${escapeHtml(q)}" placeholder="Поиск по каталогу">
     <button type="submit">Найти</button>
     <a class="button primary" href="${newHref}">Добавить программу</a>
@@ -97,11 +106,11 @@ export function adminListPage(
       <td class="thumb">${p.screenshot ? `<img src="${escapeHtml(imageUrl(p.screenshot))}" alt="" loading="lazy">` : '<span class="thumb-empty"></span>'}</td>
       <td><a href="/admin/edit/${p.id}">${escapeHtml(p.title)}</a><br><small class="mono">${escapeHtml(p.slug)}</small></td>
       <td>${escapeHtml(p.family_name)}</td>
-      <td>${escapeHtml(p.category_name ?? '')}</td>
+      <td>${escapeHtml(categoryLabel(p))}</td>
       <td>${p.year ?? ''}</td>
       <td>${p.file_name ? `<span title="${escapeHtml(p.file_name)}">${escapeHtml(formatBytes(p.file_size) || 'есть')}</span>` : '<span class="muted">—</span>'}</td>
-      <td>${p.published ? '<span class="badge ok">виден</span>' : '<span class="badge">скрыт</span>'}${p.promoted ? ' <span class="badge">продвигается</span>' : ''}</td>
-      <td class="row-actions"><a href="/p/${escapeHtml(p.slug)}">открыть</a></td>
+      <td>${p.published ? '<span class="badge ok">виден</span>' : '<span class="badge">скрыт</span>'}${p.promoted ? ' <span class="badge">продвигается</span>' : ''}${missingBadge(p)}</td>
+      <td class="row-actions"><a href="${escapeHtml(programUrl(p))}">открыть</a></td>
     </tr>`).join('')}
   </tbody>
 </table>
@@ -111,9 +120,19 @@ ${pager(page, pages, href, total)}`;
   return layout({ title: 'Программы', nav: nav(user), bodyClass: 'admin', scripts: ['admin.js', 'filters.js'] }, body);
 }
 
+/** The lamp on a row its importer no longer finds in the source. '' for every other row. */
+function missingBadge(p: ProgramRow): string {
+  if (!p.missing_since) return '';
+  return ` <span class="badge lost" title="Импорт «${escapeHtml(p.integration)}» не находит запись с ${escapeHtml(
+    p.missing_since.slice(0, 10),
+  )}">нет в источнике</span>`;
+}
+
 export type EditData = {
   families: Family[];
+  /** Both levels; the form splits them by parent_id. */
   categories: Category[];
+  screenshots: Screenshot[];
   models: Model[];
   emulators: Emulator[];
   emulatorFiles: EmulatorFile[];
@@ -163,6 +182,41 @@ function emulatorSlot(p: ProgramRow | null, emu: Emulator, files: EmulatorFile[]
 </div>`;
 }
 
+/**
+ * Screenshots of a saved program: a reorderable table (the first row is the cover shown
+ * in tiles) plus a picker that takes several files at once. The picked files are sent
+ * after the form is saved, like every other upload in this editor.
+ */
+function screenshotsBlock(p: ProgramRow | null, shots: Screenshot[]): string {
+  const table = p && shots.length
+    ? `<table class="admin-table shots-table" data-reorder="shots" data-reorder-url="/admin/reorder-shots/${p.id}">
+      <tbody>
+        ${shots
+          .map(
+            (shot) => `<tr draggable="true" data-id="${shot.id}">
+          <td class="reorder-col">
+            <span class="reorder-handle" title="Перетащите строку">⠿</span>
+            <button class="linkish" type="button" data-move="up" title="Выше">↑</button>
+            <button class="linkish" type="button" data-move="down" title="Ниже">↓</button>
+          </td>
+          <td class="thumb"><img src="${escapeHtml(imageUrl(shot.file_name))}" alt="" loading="lazy"></td>
+          <td class="row-actions"><button class="linkish danger" type="button" data-clear="program/${p.id}/shot/${shot.id}">удалить</button></td>
+        </tr>`,
+          )
+          .join('')}
+      </tbody>
+    </table>
+    ${shots.length > 1 ? '<small>Первый скриншот — обложка в каталоге. Порядок меняется перетаскиванием или стрелками.</small>' : ''}`
+    : '<div class="preview preview-empty"></div>';
+
+  return `<div class="upload">
+        <p class="upload-label">Скриншоты</p>
+        ${table}
+        <input type="file" name="screenshotFile" accept="image/png,image/jpeg,image/gif,image/webp" data-upload="screenshot" multiple>
+        <small>PNG, JPEG, GIF или WebP, до ${Math.round(config.maxScreenshotBytes / 1024)} КБ каждый; можно выбрать несколько.</small>
+      </div>`;
+}
+
 export function editPage(user: User, p: ProgramRow | null, data: EditData, error = ''): string {
   const v = (value: string | null | undefined): string => escapeHtml(value ?? '');
   const isNew = p === null;
@@ -180,13 +234,43 @@ export function editPage(user: User, p: ProgramRow | null, data: EditData, error
     .map((f) => `<option value="${f.id}"${f.id === data.familyId ? ' selected' : ''}>${escapeHtml(f.name)}</option>`)
     .join('');
 
+  // programs.category_id points at a subcategory or, failing that, at a top-level category.
+  const topCategoryId = p ? (p.category_parent_id ?? p.category_id ?? 0) : 0;
+  const subcategoryId = p && p.category_parent_id ? (p.category_id ?? 0) : 0;
+  const topCategories = data.categories.filter((c) => !c.parent_id);
+
   const categoryOptions = [`<option value="">— без категории —</option>`]
     .concat(
-      data.categories.map(
-        (c) => `<option value="${c.id}"${p && p.category_id === c.id ? ' selected' : ''}>${escapeHtml(c.name)}</option>`,
+      topCategories.map(
+        (c) => `<option value="${c.id}"${topCategoryId === c.id ? ' selected' : ''}>${escapeHtml(c.name)}</option>`,
       ),
     )
     .join('');
+
+  // Every subcategory, grouped by parent: admin.js leaves only the chosen category's group
+  // and disables the list when there is none. Without JS the groups are all there, labelled.
+  const subcategoryOptions = [`<option value="">— нет —</option>`]
+    .concat(
+      topCategories.map((top) => {
+        const children = data.categories.filter((c) => c.parent_id === top.id);
+        if (children.length === 0) return '';
+        return `<optgroup label="${escapeHtml(top.name)}" data-parent="${top.id}">${children
+          .map((c) => `<option value="${c.id}"${subcategoryId === c.id ? ' selected' : ''}>${escapeHtml(c.name)}</option>`)
+          .join('')}</optgroup>`;
+      }),
+    )
+    .join('');
+
+  const integration = p?.integration
+    ? `<div class="integration">
+        <p class="muted">Импортировано: <span class="mono">${escapeHtml(p.integration)} / ${escapeHtml(p.external_id)}</span></p>
+        ${p.missing_since
+          ? `<p><span class="badge lost">нет в источнике с ${escapeHtml(p.missing_since.slice(0, 10))}</span></p>
+        <label class="check"><input type="checkbox" name="clear_missing" value="1"> Снять отметку «нет в источнике»</label>
+        <small class="hint">С отметкой импорт программу больше не трогает: её можно снова показать в каталоге. Без отметки следующий импорт, не найдя запись, скроет программу опять.</small>`
+          : ''}
+      </div>`
+    : '';
 
   // Grouped by family so admin.js can hide the groups that do not match the chosen family.
   const modelGroups = data.families
@@ -212,7 +296,7 @@ export function editPage(user: User, p: ProgramRow | null, data: EditData, error
   <header class="editor-head">
     <h1>${isNew ? 'Новая программа' : escapeHtml(p.title)}</h1>
     <div class="editor-actions">
-      ${p ? `<a class="button" href="/p/${escapeHtml(p.slug)}" target="_blank" rel="noopener">Посмотреть</a>` : ''}
+      ${p ? `<a class="button" href="${escapeHtml(programUrl(p))}" target="_blank" rel="noopener">Посмотреть</a>` : ''}
       <a class="button" href="${data.familyId ? `/admin?family=${data.familyId}` : '/admin'}">К списку</a>
       <button class="button primary" type="submit">Сохранить</button>
     </div>
@@ -229,17 +313,27 @@ export function editPage(user: User, p: ProgramRow | null, data: EditData, error
       </label>
       <div class="two">
         <label>Семейство *<select name="family_id" required data-family-select>${familyOptions}</select></label>
-        <label>Категория<select name="category_id">${categoryOptions}</select></label>
+        <label>Год<input type="number" name="year" value="${p?.year ?? ''}" min="1950" max="2100"></label>
       </div>
       <div class="two">
-        <label>Год<input type="number" name="year" value="${p?.year ?? ''}" min="1950" max="2100"></label>
-        <label>Автор<input type="text" name="author" value="${v(p?.author)}" maxlength="120"></label>
+        <label>Категория<select name="category_id" data-category-select>${categoryOptions}</select></label>
+        <label>Подкатегория<select name="subcategory_id" data-subcategory-select>${subcategoryOptions}</select></label>
       </div>
+      <label>Автор<input type="text" name="author" value="${v(p?.author)}" maxlength="120"></label>
       <label class="check"><input type="checkbox" name="author_wanted" value="1"${p?.author_wanted ? ' checked' : ''}> Разыскивается автор</label>
+      <div class="two">
+        <label>Графика<input type="text" name="graphics" value="${v(p?.graphics)}" maxlength="200"></label>
+        <label>Музыка<input type="text" name="music" value="${v(p?.music)}" maxlength="200"></label>
+      </div>
       <label>URL (автор/источник)
         <input type="url" name="source_url" value="${v(p?.source_url)}" maxlength="500" placeholder="https://…">
       </label>
       ${mdEditor('description', 'Описание', p?.description ?? '')}
+      <label>Метаданные
+        <textarea class="mono" name="metadata" rows="5" maxlength="20000" placeholder="ключ:значение">${v(p?.metadata)}</textarea>
+      </label>
+      <small class="hint">По строке «ключ:значение». Заполняются импортом; значения доступны шаблону эмулятора как {meta:ключ}.</small>
+      ${integration}
       <label class="check"><input type="checkbox" name="published" value="1"${!p || p.published ? ' checked' : ''}> Показывать в каталоге</label>
       <label class="check"><input type="checkbox" name="promoted" value="1"${p?.promoted ? ' checked' : ''}> Продвигать — первой в «Сначала новые»</label>
       ${modelGroups
@@ -256,13 +350,7 @@ export function editPage(user: User, p: ProgramRow | null, data: EditData, error
 
     <section class="panel">
       <h2>Файлы</h2>
-      <div class="upload">
-        <p class="upload-label">Скриншот</p>
-        ${p?.screenshot ? `<img class="preview" src="${escapeHtml(imageUrl(p.screenshot))}" alt="">` : '<div class="preview preview-empty"></div>'}
-        <input type="file" name="screenshotFile" accept="image/png,image/jpeg,image/gif,image/webp" data-upload="screenshot">
-        <small>PNG, JPEG, GIF или WebP, до ${Math.round(config.maxScreenshotBytes / 1024)} КБ.</small>
-        ${p?.screenshot ? `<button class="linkish danger" type="button" data-clear="program/${p.id}/screenshot">удалить скриншот</button>` : ''}
-      </div>
+      ${screenshotsBlock(p, data.screenshots)}
       <hr>
       <div class="upload">
         <p class="upload-label">Файл для скачивания</p>

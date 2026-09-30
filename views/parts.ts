@@ -1,4 +1,5 @@
 /** Small pieces shared by the public pages and the admin. */
+import type { ProgramRow } from '../db.ts';
 import { escapeHtml } from '../http.ts';
 import { markdownExcerpt, renderMarkdown } from '../markdown.ts';
 
@@ -15,6 +16,19 @@ export function plural(n: number, one: string, few: string, many: string): strin
 /** Program screenshots and the pictures of families and models share one directory. */
 export function imageUrl(name: string): string {
   return `/screenshots/${encodeURIComponent(name)}`;
+}
+
+/**
+ * The program's page. The only place that builds this address: it carries the family
+ * slug, so it changes when a program moves, and /p/<slug> redirects here.
+ */
+export function programUrl(p: Pick<ProgramRow, 'slug' | 'family_slug'>): string {
+  return `/${encodeURIComponent(p.family_slug)}/${encodeURIComponent(p.slug)}`;
+}
+
+/** "Игра · Аркада" for a second-level category, the bare name for a top-level one. Not escaped. */
+export function categoryLabel(p: Pick<ProgramRow, 'category_name' | 'category_parent_name'>): string {
+  return [p.category_parent_name ?? '', p.category_name ?? ''].filter(Boolean).join(' · ');
 }
 
 export function imageTag(name: string, alt: string, cls: string, fallback = ''): string {

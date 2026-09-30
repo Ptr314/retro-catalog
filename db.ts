@@ -5,6 +5,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { config } from './config.ts';
+import { metadataSearchText } from './metadata.ts';
 
 export type Family = {
   id: number;
@@ -40,7 +41,7 @@ export type Model = {
 export type Emulator = {
   id: number;
   name: string;
-  /** Launch URL carrying the {url} placeholder for the package address. */
+  /** Launch URL with placeholders: {url}, {rawurl}, {meta:key} (see server.ts#emulatorLaunchUrl). */
   url_template: string;
   sort_order: number;
   created_at: string;
@@ -49,6 +50,8 @@ export type Emulator = {
 
 export type Category = {
   id: number;
+  /** NULL for a top-level category; otherwise the top-level one it sits under. Two levels only. */
+  parent_id: number | null;
   name: string;
   sort_order: number;
   created_at: string;
@@ -71,7 +74,19 @@ export type Program = {
   source_url: string;
   /** Markdown source. */
   description: string;
-  /** File name inside data/screenshots, or empty. */
+  /** Free text credits, filled mostly by integrations. */
+  graphics: string;
+  music: string;
+  /** "key:value" lines (see metadata.ts): import parameters, also fed to {meta:key} in emulator templates. */
+  metadata: string;
+  /** The external system a row was imported from, and its id there. Both empty for hand-made rows. */
+  integration: string;
+  external_id: string;
+  /** Hash of the source record at the last import; the importer skips a row whose hash is unchanged. */
+  source_hash: string;
+  /** ISO date since which the importer no longer finds the row in its source, or empty. */
+  missing_since: string;
+  /** The cover: the first of program_screenshots, denormalised. File name inside data/screenshots, or empty. */
   screenshot: string;
   /** Main download, file name inside data/files, or empty. */
   file_name: string;
@@ -89,12 +104,27 @@ export type ProgramRow = Program & {
   family_name: string;
   family_wanted_note: string;
   category_name: string | null;
+  /** Set when the program's category is a second-level one. */
+  category_parent_id: number | null;
+  category_parent_name: string | null;
 };
 
 export type ProgramInput = Omit<
   Program,
-  'id' | 'screenshot' | 'file_name' | 'file_size' | 'downloads' | 'runs' | 'created_at' | 'updated_at'
+  | 'id' | 'screenshot' | 'file_name' | 'file_size' | 'downloads' | 'runs' | 'created_at' | 'updated_at'
+  | 'integration' | 'external_id' | 'source_hash' | 'missing_since'
 >;
+
+export type Screenshot = {
+  id: number;
+  program_id: number;
+  /** File name inside data/screenshots. */
+  file_name: string;
+  sort_order: number;
+  /** Where an importer took the picture from; empty for an uploaded one. */
+  source_url: string;
+  created_at: string;
+};
 
 /**
  * What a program offers one emulator: an uploaded file, a ready-made launch address,
@@ -281,6 +311,53 @@ const migrations: string[] = [
 
   // Promoted programs head the "new" order.
   `ALTER TABLE programs ADD COLUMN promoted INTEGER NOT NULL DEFAULT 0;`,
+
+  // Integrations: two-level categories, external ids and metadata, several screenshots.
+  //
+  // categories is rebuilt because its column-level UNIQUE(name) cannot be dropped, and a
+  // genre may repeat under different parents. DROP TABLE fires programs.category_id's
+  // ON DELETE SET NULL, so the links are parked in a temp table and put back afterwards.
+  `CREATE TABLE categories_new (
+     id         INTEGER PRIMARY KEY,
+     parent_id  INTEGER REFERENCES categories_new(id) ON DELETE RESTRICT,
+     name       TEXT    NOT NULL,
+     sort_order INTEGER NOT NULL DEFAULT 0,
+     created_at TEXT    NOT NULL,
+     updated_at TEXT    NOT NULL
+   );
+   INSERT INTO categories_new (id, parent_id, name, sort_order, created_at, updated_at)
+     SELECT id, NULL, name, sort_order, created_at, updated_at FROM categories;
+   CREATE TEMP TABLE category_links AS
+     SELECT id, category_id FROM programs WHERE category_id IS NOT NULL;
+   DROP TABLE categories;
+   ALTER TABLE categories_new RENAME TO categories;
+   UPDATE programs
+      SET category_id = (SELECT l.category_id FROM category_links l WHERE l.id = programs.id)
+    WHERE id IN (SELECT id FROM category_links);
+   DROP TABLE category_links;
+   CREATE INDEX categories_order ON categories(parent_id, sort_order, id);
+   CREATE UNIQUE INDEX categories_name ON categories(COALESCE(parent_id, 0), name);
+
+   ALTER TABLE programs ADD COLUMN integration   TEXT NOT NULL DEFAULT '';
+   ALTER TABLE programs ADD COLUMN external_id   TEXT NOT NULL DEFAULT '';
+   ALTER TABLE programs ADD COLUMN metadata      TEXT NOT NULL DEFAULT '';
+   ALTER TABLE programs ADD COLUMN graphics      TEXT NOT NULL DEFAULT '';
+   ALTER TABLE programs ADD COLUMN music         TEXT NOT NULL DEFAULT '';
+   ALTER TABLE programs ADD COLUMN source_hash   TEXT NOT NULL DEFAULT '';
+   ALTER TABLE programs ADD COLUMN missing_since TEXT NOT NULL DEFAULT '';
+   CREATE UNIQUE INDEX programs_external ON programs(integration, external_id) WHERE integration <> '';
+
+   CREATE TABLE program_screenshots (
+     id         INTEGER PRIMARY KEY,
+     program_id INTEGER NOT NULL REFERENCES programs(id) ON DELETE CASCADE,
+     file_name  TEXT    NOT NULL,
+     sort_order INTEGER NOT NULL DEFAULT 0,
+     source_url TEXT    NOT NULL DEFAULT '',
+     created_at TEXT    NOT NULL
+   );
+   CREATE INDEX program_screenshots_program ON program_screenshots(program_id, sort_order, id);
+   INSERT INTO program_screenshots (program_id, file_name, sort_order, created_at)
+     SELECT id, screenshot, 10, updated_at FROM programs WHERE screenshot <> '';`,
 ];
 
 /** Runs fn inside BEGIN/COMMIT, rolling back on any throw. Must not be nested. */
@@ -321,9 +398,11 @@ export type RefTable = 'families' | 'models' | 'emulators' | 'categories';
 
 export type RefRow = Record<string, string | number | null>;
 
-export function listRef(table: RefTable, familyId: number | null = null): RefRow[] {
-  const clause = table === 'models' && familyId ? 'WHERE family_id = ?' : '';
-  const params = clause ? [familyId as number] : [];
+/** parentId narrows models to a family and categories to the children of one category. */
+export function listRef(table: RefTable, parentId: number | null = null): RefRow[] {
+  const column = table === 'models' ? 'family_id' : table === 'categories' ? 'parent_id' : '';
+  const clause = column && parentId ? `WHERE ${column} = ?` : '';
+  const params = clause ? [parentId as number] : [];
   return db
     .prepare(`SELECT * FROM ${table} ${clause} ORDER BY sort_order, id`)
     .all(...params) as unknown as RefRow[];
@@ -408,8 +487,14 @@ export function listEmulators(): Emulator[] {
   return db.prepare('SELECT * FROM emulators ORDER BY sort_order, id').all() as unknown as Emulator[];
 }
 
+/** Both levels; callers split them by parent_id. */
 export function listCategories(): Category[] {
   return db.prepare('SELECT * FROM categories ORDER BY sort_order, id').all() as unknown as Category[];
+}
+
+export function countSubcategories(categoryId: number): number {
+  const row = db.prepare('SELECT COUNT(*) AS n FROM categories WHERE parent_id = ?').get(categoryId) as { n: number };
+  return Number(row.n);
 }
 
 export function countProgramsInFamily(familyId: number): number {
@@ -441,8 +526,12 @@ export type ListOptions = {
   q?: string;
   familyId?: number | null;
   modelId?: number | null;
+  /** A top-level category matches its own programs and those of its subcategories. */
   categoryId?: number | null;
+  subcategoryId?: number | null;
   year?: number | null;
+  /** Admin list: only rows the importer no longer finds in their source. */
+  missingOnly?: boolean;
   sort?: string;
   page?: number;
   perPage?: number;
@@ -457,10 +546,12 @@ const SORTS: Record<string, string> = {
 };
 
 const PROGRAM_SELECT = `SELECT p.*, f.slug AS family_slug, f.name AS family_name,
-         f.wanted_note AS family_wanted_note, c.name AS category_name
+         f.wanted_note AS family_wanted_note, c.name AS category_name,
+         c.parent_id AS category_parent_id, pc.name AS category_parent_name
   FROM programs p
   JOIN families f ON f.id = p.family_id
-  LEFT JOIN categories c ON c.id = p.category_id`;
+  LEFT JOIN categories c ON c.id = p.category_id
+  LEFT JOIN categories pc ON pc.id = c.parent_id`;
 
 function listWhere(opts: ListOptions): { clause: string; params: (string | number)[] } {
   const where: string[] = [];
@@ -476,9 +567,14 @@ function listWhere(opts: ListOptions): { clause: string; params: (string | numbe
     params.push(opts.modelId);
   }
   if (opts.categoryId) {
-    where.push('p.category_id = ?');
-    params.push(opts.categoryId);
+    where.push('(p.category_id = ? OR p.category_id IN (SELECT id FROM categories WHERE parent_id = ?))');
+    params.push(opts.categoryId, opts.categoryId);
   }
+  if (opts.subcategoryId) {
+    where.push('p.category_id = ?');
+    params.push(opts.subcategoryId);
+  }
+  if (opts.missingOnly) where.push("p.missing_since <> ''");
   if (opts.year) {
     where.push('p.year = ?');
     params.push(opts.year);
@@ -524,6 +620,17 @@ export function slugExists(slug: string, exceptId = 0): boolean {
   return row !== undefined;
 }
 
+/**
+ * A program lives at /<family>/<slug>, the same shape as a model page, and the model
+ * wins there. So a program slug is taken when another program has it or any model does —
+ * any, not only its own family's, because a program can be moved to another family.
+ * catalog_db.py#slug_taken is the importer's copy of this rule.
+ */
+export function slugTaken(slug: string, exceptProgramId = 0): boolean {
+  if (slugExists(slug, exceptProgramId)) return true;
+  return db.prepare('SELECT id FROM models WHERE slug = ?').get(slug) !== undefined;
+}
+
 export function createProgram(p: ProgramInput, modelIds: number[]): number {
   return transaction(() => {
     const ts = now();
@@ -531,12 +638,12 @@ export function createProgram(p: ProgramInput, modelIds: number[]): number {
       .prepare(
         `INSERT INTO programs
            (slug, title, family_id, category_id, year, author, author_wanted, promoted, source_url,
-            description, published, created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            description, graphics, music, metadata, published, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
         p.slug, p.title, p.family_id, p.category_id, p.year, p.author, p.author_wanted, p.promoted, p.source_url,
-        p.description, p.published, ts, ts,
+        p.description, p.graphics, p.music, p.metadata, p.published, ts, ts,
       );
     const id = Number(result.lastInsertRowid);
     writeProgramModels(id, modelIds);
@@ -550,11 +657,13 @@ export function updateProgram(id: number, p: ProgramInput, modelIds: number[]): 
     db.prepare(
       `UPDATE programs SET
          slug = ?, title = ?, family_id = ?, category_id = ?, year = ?, author = ?,
-         author_wanted = ?, promoted = ?, source_url = ?, description = ?, published = ?, updated_at = ?
+         author_wanted = ?, promoted = ?, source_url = ?, description = ?, graphics = ?, music = ?,
+         metadata = ?, published = ?, updated_at = ?
        WHERE id = ?`,
     ).run(
       p.slug, p.title, p.family_id, p.category_id, p.year, p.author,
-      p.author_wanted, p.promoted, p.source_url, p.description, p.published, now(), id,
+      p.author_wanted, p.promoted, p.source_url, p.description, p.graphics, p.music,
+      p.metadata, p.published, now(), id,
     );
     writeProgramModels(id, modelIds);
     writeSearchText(id);
@@ -565,8 +674,67 @@ export function deleteProgram(id: number): void {
   db.prepare('DELETE FROM programs WHERE id = ?').run(id);
 }
 
-export function setScreenshot(id: number, name: string): void {
-  db.prepare('UPDATE programs SET screenshot = ?, updated_at = ? WHERE id = ?').run(name, now(), id);
+/** The administrator has dealt with a row the importer reported as gone from its source. */
+export function clearMissing(id: number): void {
+  db.prepare("UPDATE programs SET missing_since = '' WHERE id = ?").run(id);
+}
+
+// ------------------------------------------------------------------ screenshots
+
+export function listScreenshots(programId: number): Screenshot[] {
+  return db
+    .prepare('SELECT * FROM program_screenshots WHERE program_id = ? ORDER BY sort_order, id')
+    .all(programId) as unknown as Screenshot[];
+}
+
+export function getScreenshot(id: number): Screenshot | null {
+  return (db.prepare('SELECT * FROM program_screenshots WHERE id = ?').get(id) as unknown as Screenshot) ?? null;
+}
+
+/** Appends to the end of the program's strip. */
+export function addScreenshot(programId: number, fileName: string): number {
+  return transaction(() => {
+    const result = db
+      .prepare(
+        `INSERT INTO program_screenshots (program_id, file_name, sort_order, created_at)
+         VALUES (?, ?, COALESCE((SELECT MAX(sort_order) FROM program_screenshots WHERE program_id = ?), 0) + 10, ?)`,
+      )
+      .run(programId, fileName, programId, now());
+    syncCover(programId);
+    return Number(result.lastInsertRowid);
+  });
+}
+
+export function deleteScreenshot(id: number): void {
+  transaction(() => {
+    const row = getScreenshot(id);
+    if (!row) return;
+    db.prepare('DELETE FROM program_screenshots WHERE id = ?').run(id);
+    syncCover(Number(row.program_id));
+  });
+}
+
+/** Ids of another program are ignored: the WHERE pins the rows to this one. */
+export function setScreenshotOrder(programId: number, ids: number[]): void {
+  const stmt = db.prepare('UPDATE program_screenshots SET sort_order = ? WHERE id = ? AND program_id = ?');
+  transaction(() => {
+    ids.forEach((id, index) => stmt.run((index + 1) * 10, id, programId));
+    syncCover(programId);
+  });
+}
+
+/**
+ * programs.screenshot mirrors the first screenshot, so tiles and lists read the cover
+ * without a join. Every change to program_screenshots ends here, inside its transaction;
+ * catalog_db.py#sync_cover does the same for the importer.
+ */
+function syncCover(programId: number): void {
+  db.prepare(
+    `UPDATE programs
+        SET screenshot = COALESCE((SELECT file_name FROM program_screenshots
+                                    WHERE program_id = ? ORDER BY sort_order, id LIMIT 1), '')
+      WHERE id = ?`,
+  ).run(programId, programId);
 }
 
 export function setFile(id: number, name: string, size: number | null): void {
@@ -735,7 +903,11 @@ type SearchSource = {
   author_wanted: number;
   family_name: string;
   category_name: string | null;
+  category_parent_name: string | null;
   model_names: string | null;
+  graphics: string;
+  music: string;
+  metadata: string;
 };
 
 /**
@@ -747,13 +919,15 @@ export function rebuildSearchText(programId?: number): void {
   const rows = db
     .prepare(
       `SELECT p.id, p.title, p.author, p.year, p.description, p.author_wanted,
-              f.name AS family_name, c.name AS category_name,
+              p.graphics, p.music, p.metadata,
+              f.name AS family_name, c.name AS category_name, pc.name AS category_parent_name,
               (SELECT group_concat(m.name, ' ')
                  FROM program_models pm JOIN models m ON m.id = pm.model_id
                 WHERE pm.program_id = p.id) AS model_names
          FROM programs p
          JOIN families f ON f.id = p.family_id
          LEFT JOIN categories c ON c.id = p.category_id
+         LEFT JOIN categories pc ON pc.id = c.parent_id
         ${programId ? 'WHERE p.id = ?' : ''}`,
     )
     .all(...(programId ? [programId] : [])) as unknown as SearchSource[];
@@ -762,16 +936,21 @@ export function rebuildSearchText(programId?: number): void {
   for (const row of rows) stmt.run(haystack(row), row.id);
 }
 
+/** catalog_db.py#haystack is the importer's copy: same parts, same order. Change both. */
 function haystack(row: SearchSource): string {
   return [
     row.title,
     row.author,
     row.year ? String(row.year) : '',
     row.family_name,
+    row.category_parent_name ?? '',
     row.category_name ?? '',
     row.model_names ?? '',
     row.description,
     row.author_wanted ? 'разыскивается автор' : '',
+    row.graphics,
+    row.music,
+    metadataSearchText(row.metadata),
   ]
     .join(' ')
     .toLowerCase();
@@ -786,12 +965,15 @@ function writeSearchText(programId: number): void {
 
 export type Facets = {
   models: { id: number; name: string; n: number }[];
+  /** Top level only; a count includes the programs of the subcategories. */
   categories: { id: number; name: string; n: number }[];
+  /** Children of the chosen category that have programs; empty when none is chosen. */
+  subcategories: { id: number; name: string; n: number }[];
   years: number[];
 };
 
 /** Filter-bar values, scoped to a family when one is selected. */
-export function facets(familyId: number | null = null): Facets {
+export function facets(familyId: number | null = null, categoryId: number | null = null): Facets {
   const familyClause = familyId ? 'AND p.family_id = ?' : '';
   const params = familyId ? [familyId] : [];
 
@@ -809,13 +991,27 @@ export function facets(familyId: number | null = null): Facets {
 
   const categories = db
     .prepare(
-      `SELECT c.id, c.name, COUNT(*) AS n
-         FROM programs p JOIN categories c ON c.id = p.category_id
+      `SELECT t.id, t.name, COUNT(*) AS n
+         FROM programs p
+         JOIN categories c ON c.id = p.category_id
+         JOIN categories t ON t.id = COALESCE(c.parent_id, c.id)
         WHERE p.published = 1 ${familyClause}
-        GROUP BY c.id, c.name
-        ORDER BY c.sort_order, c.id`,
+        GROUP BY t.id, t.name
+        ORDER BY t.sort_order, t.id`,
     )
     .all(...params) as unknown as { id: number; name: string; n: number }[];
+
+  const subcategories = categoryId
+    ? (db
+        .prepare(
+          `SELECT c.id, c.name, COUNT(*) AS n
+             FROM programs p JOIN categories c ON c.id = p.category_id
+            WHERE p.published = 1 AND c.parent_id = ? ${familyClause}
+            GROUP BY c.id, c.name
+            ORDER BY c.sort_order, c.id`,
+        )
+        .all(categoryId, ...params) as unknown as { id: number; name: string; n: number }[])
+    : [];
 
   const years = (
     db
@@ -827,7 +1023,7 @@ export function facets(familyId: number | null = null): Facets {
       .all(...params) as unknown as { year: number }[]
   ).map((r) => Number(r.year));
 
-  return { models, categories, years };
+  return { models, categories, subcategories, years };
 }
 
 export type Stats = {
