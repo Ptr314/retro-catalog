@@ -54,6 +54,7 @@ public/         style.css, admin.js, favicon
 tools/user.ts   создание пользователя и смена пароля
 tools/import.ts массовый импорт из JSON
 tools/integrations/  импорт из внешних каталогов (Python): bk_catalog.py, общий catalog_db.py
+tools/backup_db.py   резервная копия базы без остановки сервера (Python)
 data/           catalog.db, screenshots/, files/, session-secret  (не в git)
 ```
 
@@ -181,6 +182,19 @@ python3 tools/integrations/bk_catalog.py                     # полный им
 - программа, пропавшая из источника, снимается с публикации и получает в админке отметку
   «нет в источнике» (есть фильтр в списке программ). Если пропало больше 10 % — скрипт ничего
   не снимает и сообщает об ошибке: так выглядит битая выгрузка.
+
+## Резервная копия базы
+
+```bash
+python3 tools/backup_db.py             # data/backups/catalog-ГГГГММДД-ЧЧММСС.db
+python3 tools/backup_db.py --keep 14   # и оставить только 14 последних копий
+python3 tools/backup_db.py --out /mnt/backup/catalog
+```
+
+Сервер останавливать не нужно: копия снимается средствами SQLite, а не копированием файла, поэтому
+включает и то, что ещё лежит в `catalog.db-wal`. Перед тем как копия получит своё имя, она проходит
+`PRAGMA integrity_check`; при ошибке код возврата ненулевой. Копируется только база — `data/files` и
+`data/screenshots` сохраняйте отдельно. Удобно запускать перед импортом из внешнего каталога.
 
 ## Деплой
 
