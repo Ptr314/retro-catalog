@@ -156,7 +156,11 @@ python3 tools/integrations/bk_catalog.py                     # полный им
 ```
 
 `bk_catalog.py` — каталог [BK Catalog](https://kalininskiy.github.io/bk-catalog/), интеграция `bk-catalog`.
-Параметры: `--source` (zip, каталог или URL; по умолчанию из `config.json`), `--limit N`, `--test`,
+Каталог — три файла `games.json`, `software.json`, `demoscene.json` — скрипт при каждом запуске берёт
+с сайта источника (`source` в настройке, по умолчанию `https://kalininskiy.github.io/bk-catalog/content/`).
+Локальную копию он читает только по явному ключу `--file ПУТЬ` (zip или папка с этими файлами).
+
+Остальные параметры: `--limit N`, `--test`,
 `--only games,software,demoscene`, `--quiet` (без строки на каждую запись).
 
 Любой прогон заканчивается итогом: сколько создано и обновлено, какие категории и подкатегории
@@ -167,7 +171,7 @@ python3 tools/integrations/bk_catalog.py                     # полный им
 ```json
 "integrations": {
   "bk-catalog": {
-    "source": "data/integrations/content.zip",
+    "source": "https://kalininskiy.github.io/bk-catalog/content/",
     "family": "bk",
     "emulator": "BK (bk-catalog)",
     "categories": {

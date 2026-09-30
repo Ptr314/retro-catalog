@@ -1,15 +1,19 @@
 """
 Import from BK Catalog (https://kalininskiy.github.io/bk-catalog/), integration "bk-catalog".
 
-    py tools/integrations/bk_catalog.py [--source PATH|URL] [--limit N] [--test]
+    py tools/integrations/bk_catalog.py [--file PATH] [--limit N] [--test]
                                         [--only games,software,demoscene] [--quiet] [--allow-mass-unpublish]
 
-  --source   a zip with games.json / software.json / demoscene.json, a directory holding
-             them, the URL of such a zip, or a base URL the three files hang off.
-             Default: integrations["bk-catalog"].source in config.json.
+  --file     read the catalog from a local copy instead of the network: a zip with
+             games.json / software.json / demoscene.json, or a directory holding them.
+             Without it the three files are fetched from the catalog's site —
+             integrations["bk-catalog"].source in config.json, by default
+             https://kalininskiy.github.io/bk-catalog/content/ (a base URL the files
+             hang off; the URL of a zip works too).
   --limit    stop after N records (games first, then software, then demoscene).
-  --test     walk the data and print what would happen; nothing is downloaded and the
-             database is opened read-only.
+  --test     walk the data and print what would happen; no program file or screenshot
+             is downloaded and the database is opened read-only. (The catalog itself,
+             three JSON files, is still fetched unless --file is given.)
   --only     process only these sections.
   --quiet    no line per record: only the summary at the end (what was created, what
              went wrong, what to look at). Meant for a full --test pass.
@@ -73,7 +77,7 @@ DEFAULT_CATEGORIES = {
 }
 
 DEFAULTS = {
-    'source': 'data/integrations/content.zip',
+    'source': 'https://kalininskiy.github.io/bk-catalog/content/',
     'family': 'bk',
     'emulator': 'BK (bk-catalog)',
     'categories': DEFAULT_CATEGORIES,
@@ -728,7 +732,9 @@ def main():
         stream.reconfigure(encoding='utf-8', errors='replace')
 
     parser = argparse.ArgumentParser(description='Импорт из BK Catalog.')
-    parser.add_argument('--source', help='zip, каталог или URL с games.json / software.json / demoscene.json')
+    parser.add_argument('--file', metavar='PATH',
+                        help='взять каталог из локальной копии (zip или папка с games.json, software.json, '
+                             'demoscene.json), а не с сайта')
     parser.add_argument('--limit', type=int, default=0, help='обработать не больше N записей')
     parser.add_argument('--test', action='store_true', help='только протокол: без скачивания и без записи в базу')
     parser.add_argument('--only', default=','.join(SECTIONS), help='разделы через запятую')
@@ -749,8 +755,22 @@ def main():
         settings = dict(DEFAULTS, **catalog.config.get('integrations', {}).get(INTEGRATION, {}))
         # A partial "categories" overrides only the sections it names.
         settings['categories'] = dict(DEFAULTS['categories'], **settings['categories'])
-        source = args.source or settings['source']
-        log('Источник: %s%s' % (source, '  (проверочный прогон: ничего не меняется)' if args.test else ''))
+        # The network is the rule, a local copy the exception — and only when asked for by
+        # name: a stale file left in a config must never quietly stand in for the live catalog.
+        is_url = re.compile(r'https?://', re.I).match
+        if args.file:
+            if is_url(args.file):
+                raise CatalogError('--file принимает путь к zip или папке; адрес сайта задаётся в config.json (source).')
+            source = args.file
+        else:
+            source = settings['source']
+            if not is_url(source):
+                raise CatalogError(
+                    'integrations["%s"].source в config.json должен быть http(s)-адресом, а там «%s». '
+                    'Локальную копию каталога передают ключом --file.' % (INTEGRATION, source))
+        log('Источник: %s%s%s' % (
+            'локальная копия ' if args.file else '', source,
+            '  (проверочный прогон: ничего не меняется)' if args.test else ''))
         data = load_source(source, only)
         importer = Importer(catalog, settings, args)
     except CatalogError as err:

@@ -10,7 +10,7 @@
   "sessionTtlHours": 336,
   "integrations": {
     "bk-catalog": {
-      "source": "data/integrations/content.zip",
+      "source": "https://kalininskiy.github.io/bk-catalog/content/",
       "family": "bk",
       "emulator": "BK (bk-catalog)",
       "categories": {
