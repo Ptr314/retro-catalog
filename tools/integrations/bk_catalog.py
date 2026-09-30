@@ -47,13 +47,34 @@ INTEGRATION = 'bk-catalog'
 # rewrites every imported program instead of skipping the "unchanged" ones.
 MAPPING_VERSION = 1
 
-# Section file -> the top-level category its programs go under. Genres become subcategories.
-SECTIONS = [('games', 'Игра'), ('software', 'Софт'), ('demoscene', 'Демо')]
+# The section files, in processing order.
+SECTIONS = ['games', 'software', 'demoscene']
+
+# Section -> where its programs go (integrations["bk-catalog"].categories in config.json
+# replaces these per section). A rule is either one category name for the whole section,
+# or a table genre -> target with "*" for every genre it does not list. A target is:
+#     "Категория"          the genre becomes a subcategory of it, created on demand
+#     "Категория/"         straight into the category, no subcategory
+#     "Категория/Название" a subcategory under another name than the source's genre
+# Categories and subcategories are found by name, case-insensitively.
+DEFAULT_CATEGORIES = {
+    'games': 'Игра',
+    'demoscene': 'Демо',
+    'software': {
+        'Операционная система': 'ОС/',
+        'Ассемблер': 'Программирование',
+        'Дизассемблер': 'Программирование',
+        'Отладчик': 'Программирование',
+        'Язык программирования': 'Программирование',
+        '*': 'Прикладное ПО',
+    },
+}
 
 DEFAULTS = {
     'source': 'data/integrations/content.zip',
     'family': 'bk',
     'emulator': 'BK (bk-catalog)',
+    'categories': DEFAULT_CATEGORIES,
     # «Платформа» -> slugs of models of that family. A platform that is absent here
     # (Windows, MS-DOS, AZБК) leaves the program without a model.
     'models': {
@@ -110,7 +131,7 @@ def fetch(url, limit, attempts=3):
 
 def load_source(source, only):
     """{section: [records]} from a zip, a directory, a zip URL or a base URL."""
-    names = [name for name, _ in SECTIONS if name in only]
+    names = [name for name in SECTIONS if name in only]
     is_url = bool(re.match(r'https?://', source, re.I))
 
     def from_zip(data):
@@ -217,6 +238,22 @@ def map_record(record, section):
     }
 
 
+def resolve_category(rule, genre):
+    """(top-level category, subcategory or '') for one record, by its section's rule."""
+    if isinstance(rule, dict):
+        by_genre = {key.lower(): value for key, value in rule.items()}
+        target = by_genre.get(genre.lower()) or by_genre.get('*')
+        if not target:
+            raise CatalogError('в настройке categories нет ни жанра «%s», ни правила "*"' % genre)
+    else:
+        target = rule
+    top, slash, sub = target.partition('/')
+    top, sub = top.strip(), sub.strip()
+    if not top:
+        raise CatalogError('пустое название категории в настройке categories: «%s»' % target)
+    return top, (sub if slash else genre)
+
+
 def runnable(mapped):
     """Can the bk-catalog emulator launch this program's first file?"""
     if not mapped['file_url'] or mapped['platform'] in NOT_BK_PLATFORMS:
@@ -282,7 +319,8 @@ class Importer:
         # What a record's hash depends on besides the record itself: when the admin adds
         # the missing model or emulator, "unchanged" programs must be revisited.
         self.context = json.dumps(
-            [MAPPING_VERSION, family['id'], self.platform_models, self.emulator['id'] if self.emulator else 0],
+            [MAPPING_VERSION, family['id'], self.platform_models, self.emulator['id'] if self.emulator else 0,
+             settings['categories']],
             sort_keys=True, ensure_ascii=False)
 
     def source_hash(self, record):
@@ -291,9 +329,16 @@ class Importer:
 
     # ----------------------------------------------------------- one record
 
-    def process(self, record, section, top_category):
+    def process(self, record, section, rule):
         mapped = map_record(record, section)
         label = '%s «%s»' % (mapped['external_id'], mapped['title'])
+        try:
+            # From here on "genre" is the subcategory's name as it will be on our side.
+            top_category, mapped['genre'] = resolve_category(rule, mapped['genre'])
+        except CatalogError as err:
+            self.counts['errors'] += 1
+            log('[ошибка] %s: %s' % (label, err))
+            return
         if not mapped['title'] or mapped['external_id'] in ('None', ''):
             self.counts['errors'] += 1
             log('[ошибка] %s: нет ID или названия' % label)
@@ -548,7 +593,7 @@ def main():
     parser.add_argument('--source', help='zip, каталог или URL с games.json / software.json / demoscene.json')
     parser.add_argument('--limit', type=int, default=0, help='обработать не больше N записей')
     parser.add_argument('--test', action='store_true', help='только протокол: без скачивания и без записи в базу')
-    parser.add_argument('--only', default=','.join(name for name, _ in SECTIONS), help='разделы через запятую')
+    parser.add_argument('--only', default=','.join(SECTIONS), help='разделы через запятую')
     parser.add_argument('--delay', type=float, default=0.05, help='пауза между скачиваниями, секунд')
     parser.add_argument('--verbose', action='store_true', help='показывать и записи без изменений')
     parser.add_argument('--allow-mass-unpublish', action='store_true',
@@ -556,13 +601,15 @@ def main():
     args = parser.parse_args()
 
     only = [name.strip() for name in args.only.split(',') if name.strip()]
-    unknown = [name for name in only if name not in dict(SECTIONS)]
+    unknown = [name for name in only if name not in SECTIONS]
     if unknown:
         parser.error('неизвестные разделы: %s' % ', '.join(unknown))
 
     try:
         catalog = Catalog(read_only=args.test)
         settings = dict(DEFAULTS, **catalog.config.get('integrations', {}).get(INTEGRATION, {}))
+        # A partial "categories" overrides only the sections it names.
+        settings['categories'] = dict(DEFAULTS['categories'], **settings['categories'])
         source = args.source or settings['source']
         log('Источник: %s%s' % (source, '  (проверочный прогон: ничего не меняется)' if args.test else ''))
         data = load_source(source, only)
@@ -575,13 +622,14 @@ def main():
     total = sum(len(records) for records in data.values())
     processed = 0
     limited = False
-    for section, top_category in SECTIONS:
+    for section in SECTIONS:
+        rule = settings['categories'][section]
         for record in data.get(section, []):
             if args.limit and processed >= args.limit:
                 limited = True
                 break
             seen.add(str(record.get('ID')))
-            importer.process(record, section, top_category)
+            importer.process(record, section, rule)
             processed += 1
 
     # "Gone from the source" is only knowable after a complete pass over a non-empty source.
