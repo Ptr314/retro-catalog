@@ -9,7 +9,7 @@ when one side changes, change the other:
     slugify, safe_file_name, is_safe_name, detect_image   <- http.ts
     parse_metadata, metadata_search_text                  <- metadata.ts
     haystack / rebuild_search_text                        <- db.ts
-    slug_taken, sync_cover                                <- db.ts
+    slug_taken, sync_cover, file_referenced               <- db.ts
     stored names ({id}-name, {id}-e{emu}-name, p{id}-hex) <- server.ts
 
 Writes are grouped with begin() / commit() / rollback(). Files written inside a unit
@@ -199,6 +199,10 @@ class Catalog:
             # On a case-insensitive disk the "old" name may be the file just written.
             if any(_same_file(path, new) for new in self._written):
                 continue
+            # A program's download and its emulator slots may share one stored file: it
+            # goes only when the last row naming it is gone (server.ts#removeStoredFile).
+            if path.parent == self.files_dir and self.file_referenced(path.name):
+                continue
             _unlink(path)
         self._written, self._doomed = [], []
 
@@ -326,6 +330,33 @@ class Catalog:
             'file_name = excluded.file_name, file_size = excluded.file_size, updated_at = excluded.updated_at',
             (program_id, emulator_id, name, len(data), now_iso()))
         return name
+
+    def share_emulator_file(self, program_id, emulator_id):
+        """
+        The slot launches the program's own download: it names the same stored file, no
+        copy is made. A typed launch address and the run counter are kept. Returns False
+        when the program has no download to share.
+        """
+        program = self.db.execute('SELECT file_name, file_size FROM programs WHERE id = ?', (program_id,)).fetchone()
+        if not program or not program['file_name']:
+            return False
+        slot = self.emulator_slot(program_id, emulator_id)
+        if slot and slot['file_name'] and slot['file_name'] != program['file_name']:
+            self._doom(self.files_dir / slot['file_name'])
+        self.db.execute(
+            'INSERT INTO program_emulator_files (program_id, emulator_id, file_name, file_size, updated_at) '
+            'VALUES (?, ?, ?, ?, ?) '
+            'ON CONFLICT (program_id, emulator_id) DO UPDATE SET '
+            'file_name = excluded.file_name, file_size = excluded.file_size, updated_at = excluded.updated_at',
+            (program_id, emulator_id, program['file_name'], program['file_size'], now_iso()))
+        return True
+
+    def file_referenced(self, name):
+        """Does any row still name this stored file? (db.ts#fileReferenced)"""
+        if self.db.execute('SELECT 1 FROM programs WHERE file_name = ? LIMIT 1', (name,)).fetchone():
+            return True
+        return self.db.execute(
+            'SELECT 1 FROM program_emulator_files WHERE file_name = ? LIMIT 1', (name,)).fetchone() is not None
 
     def clear_emulator_file(self, program_id, emulator_id):
         slot = self.emulator_slot(program_id, emulator_id)

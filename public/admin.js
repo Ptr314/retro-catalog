@@ -195,7 +195,7 @@
 
   document.querySelectorAll('[data-clear]').forEach(function (button) {
     button.addEventListener('click', function () {
-      if (!window.confirm('Удалить загруженный файл?')) return;
+      if (!window.confirm(button.getAttribute('data-clear-confirm') || 'Удалить загруженный файл?')) return;
       fetch('/admin/clear/' + button.getAttribute('data-clear'), {
         method: 'POST',
         headers: { Accept: 'application/json' },
@@ -203,6 +203,24 @@
         .then(function (res) {
           if (!res.ok) throw new Error('не получилось удалить');
           window.location.reload();
+        })
+        .catch(function (err) { say(err.message, true); });
+    });
+  });
+
+  // ------------------------- emulator slot: launch the program's own download, no copy
+
+  document.querySelectorAll('[data-share]').forEach(function (button) {
+    button.addEventListener('click', function () {
+      fetch('/admin/share/' + button.getAttribute('data-share'), {
+        method: 'POST',
+        headers: { Accept: 'application/json' },
+      })
+        .then(function (res) {
+          return res.json().then(function (body) {
+            if (!res.ok) throw new Error(body.error || 'не получилось');
+            window.location.reload();
+          });
         })
         .catch(function (err) { say(err.message, true); });
     });

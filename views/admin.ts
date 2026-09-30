@@ -158,6 +158,8 @@ function emulatorSlot(p: ProgramRow | null, emu: Emulator, files: EmulatorFile[]
   const slot = files.find((f) => f.emulator_id === emu.id);
   const file = slot?.file_name ?? '';
   const url = slot?.file_url ?? '';
+  // The slot can name the program's own download instead of holding a second copy of it.
+  const shared = Boolean(file) && file === p?.file_name;
 
   return `<div class="upload emu-slot">
   <p class="upload-label">${escapeHtml(emu.name)}</p>
@@ -165,11 +167,20 @@ function emulatorSlot(p: ProgramRow | null, emu: Emulator, files: EmulatorFile[]
     ? `<p class="mono current-file">${escapeHtml(file)} <span class="muted">${escapeHtml(
         formatBytes(slot!.file_size),
       )}</span></p>
-       ${externalUrl(`${config.siteUrl}/files/${file}`)}`
+       ${shared
+         ? '<small>Общий с файлом для скачивания: отдельной копии нет.</small>'
+         : externalUrl(`${config.siteUrl}/files/${file}`)}`
     : '<p class="muted">файл не загружен</p>'}
   ${p
     ? `<input type="file" data-upload-emu="${emu.id}">
-       ${file ? `<button class="linkish danger" type="button" data-clear="program/${p.id}/emu/${emu.id}">удалить файл</button>` : ''}`
+       ${p.file_name && !shared
+         ? `<button class="linkish" type="button" data-share="program/${p.id}/emu/${emu.id}">использовать файл для скачивания</button>`
+         : ''}
+       ${file
+         ? `<button class="linkish danger" type="button" data-clear="program/${p.id}/emu/${emu.id}"${
+             shared ? ' data-clear-confirm="Отвязать файл от этого эмулятора? Сам файл останется."' : ''
+           }>${shared ? 'отвязать файл' : 'удалить файл'}</button>`
+         : ''}`
     : '<small>Файл можно загрузить после сохранения.</small>'}
   <label>Готовая ссылка на запуск
     <input type="url" name="emu_url_${emu.id}" value="${escapeHtml(url)}" maxlength="500" placeholder="https://…">

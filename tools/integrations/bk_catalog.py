@@ -26,7 +26,11 @@ vanished from the source is unpublished and marked (programs.missing_since) — 
 the admin decides what to do next.
 
 Families, models and emulators are never created: config.json names existing ones by
-slug (the emulator by name). Categories and subcategories (genres) are created on demand.
+slug (the emulators by name). Categories and subcategories (genres) are created on demand.
+
+One file per program is copied to us — its download. The launch buttons hold no copies:
+the emulator's slot, and BK Studio's for an archive that carries .asm/.mac sources, both
+name that same stored file.
 """
 import argparse
 import hashlib
@@ -51,7 +55,7 @@ INTEGRATION = 'bk-catalog'
 
 # Part of every record's hash: bump it when the mapping below changes, and the next run
 # rewrites every imported program instead of skipping the "unchanged" ones.
-MAPPING_VERSION = 1
+MAPPING_VERSION = 2
 
 # The section files, in processing order.
 SECTIONS = ['games', 'software', 'demoscene']
@@ -80,6 +84,9 @@ DEFAULTS = {
     'source': 'https://kalininskiy.github.io/bk-catalog/content/',
     'family': 'bk',
     'emulator': 'BK (bk-catalog)',
+    # The IDE of the same site, a second row in the emulators table. It opens an archive
+    # of sources, so only programs whose zip holds .asm or .mac files get its button.
+    'studio': 'BK Studio',
     'categories': DEFAULT_CATEGORIES,
     # «Платформа» -> slugs of models of that family. A platform that is absent here
     # (Windows, MS-DOS, AZБК) leaves the program without a model.
@@ -267,6 +274,20 @@ def runnable(mapped):
     return url_file_name(mapped['file_url']).lower().endswith(RUNNABLE_EXTENSIONS)
 
 
+SOURCE_EXTENSIONS = ('.asm', '.mac')
+
+
+def has_sources(data, name):
+    """Is this a zip with assembler sources inside — something BK Studio can open as a project?"""
+    if not name.lower().endswith('.zip'):
+        return False
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            return any(entry.lower().endswith(SOURCE_EXTENSIONS) for entry in archive.namelist())
+    except (zipfile.BadZipFile, OSError, ValueError):
+        return False
+
+
 def slug_candidates(mapped):
     """The title; then the title told apart by its first author, by its year; then by a number."""
     base = slugify(mapped['title']) or 'program-%s' % mapped['external_id']
@@ -308,6 +329,8 @@ class Importer:
         self.without_launch = {}          # reason -> programs
         self.without_genre = {}           # top category -> programs with no genre in the source
         self.without_shots = 0
+        self.with_studio = 0              # programs given the BK Studio button
+        self.studio_unknown = 0           # --test: new programs, archive not fetched, so not known yet
         self.renamed_slugs = []           # (label, slug): the title's own slug was taken
         self.gone = []                    # labels marked as missing from the source
 
@@ -333,6 +356,11 @@ class Importer:
         if self.emulator is None:
             self.setup_problems.append(
                 'эмулятор «%s» не найден — программы импортируются без кнопки запуска' % settings['emulator'])
+        self.studio = catalog.emulator_by_name(settings['studio'])
+        if self.studio is None:
+            self.setup_problems.append(
+                'эмулятор «%s» не найден — программы с исходниками импортируются без кнопки студии'
+                % settings['studio'])
         for problem in self.setup_problems:
             log('! ' + problem)
 
@@ -340,7 +368,7 @@ class Importer:
         # the missing model or emulator, "unchanged" programs must be revisited.
         self.context = json.dumps(
             [MAPPING_VERSION, family['id'], self.platform_models, self.emulator['id'] if self.emulator else 0,
-             settings['categories']],
+             settings['categories'], self.studio['id'] if self.studio else 0],
             sort_keys=True, ensure_ascii=False)
 
     def source_hash(self, record):
@@ -505,8 +533,7 @@ class Importer:
         if file_data is not None:
             name = url_file_name(mapped['file_url'])
             catalog.set_main_file(program_id, name, file_data)
-            if launch:
-                catalog.set_emulator_file(program_id, self.emulator['id'], name, file_data)
+            self.place_slots(program_id, mapped, launch, file_data, name)
         for index, (url, data, ext) in enumerate(shots):
             catalog.add_screenshot(program_id, data, ext, url, (index + 1) * 10)
         catalog.sync_cover(program_id)
@@ -546,17 +573,12 @@ class Importer:
 
         if file_data is not None:
             catalog.set_main_file(program_id, name, file_data)
-        if self.emulator is not None:
-            slot = catalog.emulator_slot(program_id, self.emulator['id'])
-            slot_ok = bool(slot and slot['file_name'] and (catalog.files_dir / slot['file_name']).exists())
-            if not launch:
-                catalog.clear_emulator_file(program_id, self.emulator['id'])
-            elif file_data is not None:
-                catalog.set_emulator_file(program_id, self.emulator['id'], name, file_data)
-            elif not slot_ok and have_file:
-                # The emulator appeared, or its copy was removed: make it from our own download.
-                body = (catalog.files_dir / existing['file_name']).read_bytes()
-                catalog.set_emulator_file(program_id, self.emulator['id'], name, body)
+        # The archive as we hold it: fresh from the network, or our copy on disk. None when
+        # there is neither — then no slot can point anywhere and both are cleared.
+        body = file_data
+        if body is None and have_file:
+            body = (catalog.files_dir / existing['file_name']).read_bytes()
+        self.place_slots(program_id, mapped, launch, body, name)
 
         for url, row in imported.items():
             if url not in mapped['screenshots']:
@@ -577,6 +599,27 @@ class Importer:
         self.say('[обновлена] %s -> /%s/%s (%s%s)' % (
             label, self.family['slug'], existing['slug'], note, self.summary(file_data, launch, len(added))))
         return existing['slug']
+
+    def wants_studio(self, mapped, body, name):
+        return (self.studio is not None and body is not None
+                and mapped['platform'] not in NOT_BK_PLATFORMS and has_sources(body, name))
+
+    def place_slots(self, program_id, mapped, launch, body, name):
+        """
+        The two launch buttons. Neither holds a file of its own: a slot names the program's
+        download (share_emulator_file). A slot that no longer applies is cleared — which
+        also retires the separate copies earlier versions of this importer made.
+        """
+        studio = self.wants_studio(mapped, body, name)
+        for emulator, wanted in ((self.emulator, launch and body is not None), (self.studio, studio)):
+            if emulator is None:
+                continue
+            if wanted:
+                self.catalog.share_emulator_file(program_id, emulator['id'])
+            else:
+                self.catalog.clear_emulator_file(program_id, emulator['id'])
+        if studio:
+            self.with_studio += 1
 
     @staticmethod
     def summary(file_data, launch, shots):
@@ -609,6 +652,17 @@ class Importer:
         ]
         if created:
             details.append('будет создано: ' + ', '.join(created))
+
+        # Whether BK Studio gets a button depends on what is inside the archive. For a
+        # program we already hold, look; for a new one the archive is not fetched in a test.
+        if self.studio is not None and mapped['file_url'] and mapped['platform'] not in NOT_BK_PLATFORMS:
+            held = catalog.files_dir / existing['file_name'] if existing and existing['file_name'] else None
+            if held is not None and held.exists():
+                if has_sources(held.read_bytes(), url_file_name(mapped['file_url'])):
+                    self.with_studio += 1
+                    details.append('студия: да')
+            elif url_file_name(mapped['file_url']).lower().endswith('.zip'):
+                self.studio_unknown += 1
 
         if existing:
             self.counts['updated'] += 1
@@ -716,6 +770,12 @@ class Importer:
                     table(self.without_models))
             section('БЕЗ КНОПКИ ЗАПУСКА: %d из %d — по причинам' % (sum(self.without_launch.values()), changed),
                     table(self.without_launch))
+            section('С КНОПКОЙ СТУДИИ (в архиве есть .asm или .mac): %d%s' % (
+                        self.with_studio,
+                        ' — и ещё %d новых zip-архивов, про которые станет известно при импорте'
+                        % self.studio_unknown if self.studio_unknown else ''),
+                    ['слот студии, как и слот эмулятора, ссылается на файл для скачивания — копий нет']
+                    if self.studio is not None else ['эмулятор студии не найден — кнопки не ставятся'])
             section('БЕЗ ЖАНРА В ИСТОЧНИКЕ: %d — попадают прямо в категорию' % sum(self.without_genre.values()),
                     table(self.without_genre))
             section('БЕЗ СКРИНШОТОВ: %d из %d' % (self.without_shots, changed),

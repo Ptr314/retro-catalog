@@ -308,10 +308,10 @@ route('POST', '/admin/delete/:id', async (ctx) => {
   for (const shot of db.listScreenshots(program.id)) {
     await unlink(join(screenshotsDir, shot.file_name)).catch(() => {});
   }
-  if (program.file_name) await unlink(join(filesDir, program.file_name)).catch(() => {});
-  // SQLite drops the rows; the files behind them are ours to remove.
-  for (const name of db.programFileNames(program.id)) {
-    await unlink(join(filesDir, name)).catch(() => {});
+  // SQLite drops the rows; the files behind them are ours to remove. No reference check:
+  // stored names start with the program's id, so nothing outside this program shares them.
+  for (const name of new Set([program.file_name, ...db.programFileNames(program.id)])) {
+    if (name) await unlink(join(filesDir, name)).catch(() => {});
   }
   db.deleteProgram(program.id);
   redirect(ctx.res, '/admin');
@@ -338,9 +338,10 @@ route('PUT', '/admin/upload/program/:id/emu/:emu', async (ctx) => {
   const body = await readBody(ctx.req, config.maxFileBytes);
   if (body.length === 0) return json(ctx.res, 400, { error: 'Пустой файл' });
 
-  const previous = db.getEmulatorFile(id, emulatorId);
-  await replaceStoredFile(previous?.file_name ?? '', name, body);
+  const previous = db.getEmulatorFile(id, emulatorId)?.file_name ?? '';
+  await writeStoredFile(previous, name, body);
   db.setEmulatorFile(id, emulatorId, name, body.length);
+  await dropReplacedFile(previous, name);
   json(ctx.res, 200, {
     name,
     size: body.length,
@@ -354,9 +355,26 @@ route('POST', '/admin/clear/program/:id/emu/:emu', async (ctx) => {
   const emulatorId = Number(ctx.params.emu);
   const slot = db.getEmulatorFile(id, emulatorId);
   if (!slot) return json(ctx.res, 404, { error: 'Не найдено' });
-  await unlink(join(filesDir, slot.file_name)).catch(() => {});
   db.clearEmulatorFile(id, emulatorId);
+  // A slot that shared the program's download only lets go of it; the file stays.
+  await removeStoredFile(slot.file_name);
   json(ctx.res, 200, { ok: true });
+}, true);
+
+/**
+ * Points an emulator slot at the program's own download instead of a second copy of it.
+ * Nothing is written to disk: the slot merely names the same stored file, which is why
+ * every removal goes through removeStoredFile().
+ */
+route('POST', '/admin/share/program/:id/emu/:emu', (ctx) => {
+  const id = Number(ctx.params.id);
+  const emulatorId = Number(ctx.params.emu);
+  const program = db.getProgramById(id);
+  if (!program || !db.getRef('emulators', emulatorId)) return json(ctx.res, 404, { error: 'Не найдено' });
+  if (!program.file_name) return json(ctx.res, 400, { error: 'У программы нет файла для скачивания' });
+  const previous = db.getEmulatorFile(id, emulatorId)?.file_name ?? '';
+  db.setEmulatorFile(id, emulatorId, program.file_name, program.file_size);
+  return removeStoredFile(previous).then(() => json(ctx.res, 200, { ok: true }));
 }, true);
 
 /** One screenshot out of a program's strip; the next one in order becomes the cover. */
@@ -402,8 +420,9 @@ route('PUT', '/admin/upload/:entity/:id/:kind', async (ctx) => {
     const name = storedFileName(`${id}`, original);
     const body = await readBody(ctx.req, config.maxFileBytes);
     if (body.length === 0) return json(ctx.res, 400, { error: 'Пустой файл' });
-    await replaceStoredFile(program.file_name, name, body);
+    await writeStoredFile(program.file_name, name, body);
     db.setFile(id, name, body.length);
+    await dropReplacedFile(program.file_name, name);
     return json(ctx.res, 200, {
       name,
       size: body.length,
@@ -433,8 +452,9 @@ route('POST', '/admin/clear/:entity/:id/:kind', async (ctx) => {
     const program = db.getProgramById(id);
     if (!program) return json(ctx.res, 404, { error: 'Не найдено' });
     if (kind === 'file' && program.file_name) {
-      await unlink(join(filesDir, program.file_name)).catch(() => {});
       db.setFile(id, '', null);
+      // Still on disk if an emulator slot launches this very file.
+      await removeStoredFile(program.file_name);
     }
     return json(ctx.res, 200, { ok: true });
   }
@@ -524,10 +544,10 @@ route('POST', '/admin/ref/:table/delete/:id', async (ctx) => {
   const refusal = spec.beforeDelete(id);
   if (refusal) return renderRefList(ctx, spec, 409, refusal);
 
-  // Files first: the rows that name them are about to disappear.
-  if (spec.table === 'emulators') {
-    for (const name of db.emulatorFileNames(id)) await unlink(join(filesDir, name)).catch(() => {});
-  }
+  // Pictures first: the rows that name them are about to disappear. An emulator's files
+  // are only listed here and removed after the rows are gone — a slot may share its file
+  // with the program's download, and that one must outlive the emulator.
+  const emulatorFiles = spec.table === 'emulators' ? db.emulatorFileNames(id) : [];
   if (spec.table === 'families') {
     for (const model of db.listModels(id)) {
       if (model.image) await unlink(join(screenshotsDir, model.image)).catch(() => {});
@@ -536,6 +556,7 @@ route('POST', '/admin/ref/:table/delete/:id', async (ctx) => {
   if (row.image) await unlink(join(screenshotsDir, String(row.image))).catch(() => {});
 
   db.deleteRef(spec.table, id);
+  for (const name of emulatorFiles) await removeStoredFile(name);
   db.rebuildSearchText();
   redirect(ctx.res, spec.table === 'categories' && row.parent_id
     ? `/admin/ref/categories/${row.parent_id}`
@@ -901,16 +922,35 @@ function storedFileName(prefix: string, original: string): string {
 }
 
 /**
- * Writes the new file and removes the one it replaces. Names keep their case, so on a
- * case-insensitive disk (Windows, macOS) "A.zip" after "a.zip" is the same file:
- * unlinking "the old one" after the write would delete what was just written.
+ * One stored file may be named by several rows: the program's download and any number of
+ * its emulator slots (a slot can point at the download instead of holding a copy). So a
+ * file leaves the disk only when the last row naming it is gone — call this *after* the
+ * database no longer refers to it. catalog_db.py#commit applies the same rule.
  */
-async function replaceStoredFile(previous: string, name: string, body: Buffer): Promise<void> {
-  const sameOnDisk = previous.toLowerCase() === name.toLowerCase();
-  if (previous && sameOnDisk && previous !== name) await unlink(join(filesDir, previous)).catch(() => {});
-  await writeFile(join(filesDir, name), body);
-  if (previous && !sameOnDisk) await unlink(join(filesDir, previous)).catch(() => {});
+async function removeStoredFile(name: string): Promise<void> {
+  if (!name || db.fileReferenced(name)) return;
+  await unlink(join(filesDir, name)).catch(() => {});
 }
+
+/**
+ * Replacing a stored file takes two steps around the database update: write the new one,
+ * then — once the row names it — drop the one it replaced. Names keep their case, so on
+ * a case-insensitive disk (Windows, macOS) "A.zip" after "a.zip" is the same file:
+ * unlinking "the old one" after the write would delete what was just written. That case
+ * is settled here, before the write; every other one is left to dropReplacedFile().
+ */
+async function writeStoredFile(previous: string, name: string, body: Buffer): Promise<void> {
+  if (previous && previous !== name && sameOnDisk(previous, name)) {
+    await unlink(join(filesDir, previous)).catch(() => {});
+  }
+  await writeFile(join(filesDir, name), body);
+}
+
+async function dropReplacedFile(previous: string, name: string): Promise<void> {
+  if (previous && !sameOnDisk(previous, name)) await removeStoredFile(previous);
+}
+
+const sameOnDisk = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
 
 /** The name a visitor saves the file under: the stored one minus our "{id}-" prefix. */
 function downloadName(stored: string): string {

@@ -884,6 +884,16 @@ export function emulatorFileNames(emulatorId: number): string[] {
   ).map((r) => String(r.file_name));
 }
 
+/**
+ * Does any row still name this stored file? The program's download and its emulator
+ * slots may share one file, so nothing is unlinked while this is true.
+ * catalog_db.py#file_referenced is the importer's copy.
+ */
+export function fileReferenced(name: string): boolean {
+  if (db.prepare('SELECT 1 FROM programs WHERE file_name = ? LIMIT 1').get(name) !== undefined) return true;
+  return db.prepare('SELECT 1 FROM program_emulator_files WHERE file_name = ? LIMIT 1').get(name) !== undefined;
+}
+
 export function programFileNames(programId: number): string[] {
   return (
     db.prepare('SELECT file_name FROM program_emulator_files WHERE program_id = ?').all(programId) as unknown as {

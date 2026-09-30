@@ -184,8 +184,11 @@ sudo -u retro python3 tools/integrations/bk_catalog.py
 
 1. В `config.json` добавьте секцию `integrations` (пример — в `config.example.json`): slug семейства,
    slug'и его моделей для каждой платформы источника, название эмулятора.
-2. В админке заведите эмулятор с этим названием и шаблоном
-   `https://kalininskiy.github.io/bk-catalog/emulator/bk-emulator.html?URL={rawurl}&PLATFORM={meta:platform}`.
+2. В админке заведите два эмулятора с названиями из настройки:
+   - эмулятор (`emulator`): `https://kalininskiy.github.io/bk-catalog/emulator/bk-emulator.html?URL={rawurl}&PLATFORM={meta:platform}`
+   - среду разработки (`studio`): `https://kalininskiy.github.io/bk-catalog/bkstudio/?src={url}&platform={meta:platform}`
+
+   Кнопку студии получают только программы, в zip-архиве которых есть `.asm` или `.mac`.
 3. `corsOrigins` в `config.json` должен допускать `https://kalininskiy.github.io` (или `*`) — эмулятор
    скачивает файл с нашего сайта сам.
 

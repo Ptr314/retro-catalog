@@ -13,6 +13,7 @@
       "source": "https://kalininskiy.github.io/bk-catalog/content/",
       "family": "bk",
       "emulator": "BK (bk-catalog)",
+      "studio": "BK Studio",
       "categories": {
         "games": "Игра",
         "demoscene": "Демо",
