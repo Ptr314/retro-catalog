@@ -38,12 +38,47 @@ export function imageTag(name: string, alt: string, cls: string, fallback = ''):
   return `<div class="${cls} shot-empty"><span>${escapeHtml(fallback || '?')}</span></div>`;
 }
 
+/** How many numbers are shown on each side of the current page. */
+const PAGER_REACH = 2;
+
+/**
+ * Which page numbers to show: the first, the last and the current one with its
+ * neighbours; 0 stands for a gap. A gap that would hide a single page shows that page
+ * instead — "1 … 3" is no shorter than "1 2 3".
+ */
+function pagerNumbers(page: number, pages: number): number[] {
+  const shown: number[] = [];
+  for (let n = 1; n <= pages; n += 1) {
+    if (n === 1 || n === pages || Math.abs(n - page) <= PAGER_REACH) shown.push(n);
+  }
+  const out: number[] = [];
+  let previous = 0;
+  for (const n of shown) {
+    if (n - previous === 2) out.push(n - 1);
+    else if (n - previous > 2) out.push(0);
+    out.push(n);
+    previous = n;
+  }
+  return out;
+}
+
+/** "← назад  1 … 28 29 [30] 31 32 … 57  вперёд →". Plain links: works without JavaScript. */
 export function pager(page: number, pages: number, href: (page: number) => string, total = 0): string {
   if (pages <= 1) return '';
-  return `<nav class="pager">
-  ${page > 1 ? `<a href="${escapeHtml(href(page - 1))}">← назад</a>` : '<span></span>'}
-  <span class="pager-pos">страница ${page} из ${pages}${total ? ` (${total})` : ''}</span>
-  ${page < pages ? `<a href="${escapeHtml(href(page + 1))}">вперёд →</a>` : '<span></span>'}
+  const numbers = pagerNumbers(page, pages)
+    .map((n) => {
+      if (n === 0) return '<span class="pager-gap">…</span>';
+      if (n === page) return `<span class="pager-page active" aria-current="page">${n}</span>`;
+      return `<a class="pager-page" href="${escapeHtml(href(n))}" aria-label="Страница ${n}">${n}</a>`;
+    })
+    .join('');
+  return `<nav class="pager" aria-label="Страницы">
+  ${page > 1 ? `<a class="pager-step" href="${escapeHtml(href(page - 1))}" rel="prev">← назад</a>` : '<span class="pager-step"></span>'}
+  <div class="pager-middle">
+    <div class="pager-pages">${numbers}</div>
+    <span class="pager-pos">страница ${page} из ${pages}${total ? ` (${total})` : ''}</span>
+  </div>
+  ${page < pages ? `<a class="pager-step" href="${escapeHtml(href(page + 1))}" rel="next">вперёд →</a>` : '<span class="pager-step"></span>'}
 </nav>`;
 }
 

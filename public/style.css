@@ -326,8 +326,23 @@ a.view-option:hover { color: var(--accent); text-decoration: none; }
 .catalog-table .card-meta { margin: .2rem 0 .3rem; }
 .catalog-table .row-actions { white-space: nowrap; text-align: right; }
 
-.pager { display: flex; justify-content: space-between; align-items: center; margin: 2.2rem 0 0; }
-.pager-pos { color: var(--muted); font-size: .9rem; }
+/* previous / numbered pages / next. The step cells keep their width when empty, so the
+   numbers stay centred on the first and the last page. */
+.pager { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin: 2.2rem 0 0; }
+.pager-step { flex: 0 0 6.5rem; line-height: 1.9rem; white-space: nowrap; }
+.pager-step:last-child { text-align: right; }
+.pager-middle { display: flex; flex-direction: column; align-items: center; gap: .45rem; min-width: 0; }
+.pager-pages { display: flex; flex-wrap: wrap; justify-content: center; gap: .3rem; }
+.pager-page, .pager-gap {
+  min-width: 1.9rem; height: 1.9rem; padding: 0 .35rem;
+  display: inline-grid; place-items: center;
+  font-size: .85rem; font-weight: 500; line-height: 1;
+}
+.pager-page { border: 2px solid var(--line); color: var(--text); }
+a.pager-page:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
+.pager-page.active { background: var(--accent); border-color: var(--accent); color: var(--ink); }
+.pager-gap { color: var(--muted); }
+.pager-pos { color: var(--muted); font-size: .85rem; }
 .empty { color: var(--muted); padding: 2.5rem 0; text-align: center; }
 
 /* -------------------------------------------------------------------- home */
@@ -533,6 +548,9 @@ a.chip:hover { border-color: var(--accent); color: var(--accent); text-decoratio
 }
 @media (max-width: 620px) {
   .two { grid-template-columns: 1fr; }
+  .pager { flex-wrap: wrap; }
+  .pager-step { flex: 1 1 40%; order: 1; }
+  .pager-middle { flex: 1 1 100%; }
   .admin-table .thumb, .admin-table td:nth-child(3), .admin-table th:nth-child(3) { display: none; }
   .site-main { padding: 1.2rem .9rem 2.5rem; }
   .site-header { padding: .6rem .9rem .85rem; }
