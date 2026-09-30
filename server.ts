@@ -34,6 +34,8 @@ import { refEditPage, refListPage } from './views/admin-refs.ts';
 import type { RefEditOptions } from './views/admin-refs.ts';
 import { programUrl } from './views/parts.ts';
 import { userEditPage, userListPage } from './views/admin-users.ts';
+import { statsPage } from './views/admin-stats.ts';
+import { diskReport } from './diskstats.ts';
 
 const publicDir = join(rootDir, 'public');
 
@@ -547,6 +549,22 @@ route('POST', '/admin/reorder/:table', async (ctx) => {
   if (ids.length === 0) return json(ctx.res, 400, { error: 'Пустой порядок' });
   db.setSortOrder(spec.table, ids);
   json(ctx.res, 200, { ok: true });
+}, true);
+
+// -------------------------------------------------------- admin: statistics
+
+/** Counts from the database plus a walk over data/. Computed on every view — it is an admin page. */
+route('GET', '/admin/stats', async (ctx) => {
+  const started = Date.now();
+  const report = db.report();
+  const disk = await diskReport(report.referenced);
+  html(ctx.res, 200, statsPage(ctx.user!, report, disk, {
+    nodeVersion: process.version,
+    platform: `${process.platform} ${process.arch}`,
+    uptimeSeconds: Math.floor(process.uptime()),
+    memoryBytes: process.memoryUsage().rss,
+    generatedMs: Date.now() - started,
+  }));
 }, true);
 
 // ------------------------------------------------------------- admin: users

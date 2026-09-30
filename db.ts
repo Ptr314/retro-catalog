@@ -1063,6 +1063,210 @@ export function stats(): Stats {
   };
 }
 
+// ----------------------------------------------------------------------- report
+
+/** Everything the admin's statistics page reads from the database, in one pass. */
+export type Report = {
+  engine: {
+    sqliteVersion: string;
+    schemaVersion: number;
+    journalMode: string;
+    pageSize: number;
+    pageCount: number;
+    /** Pages inside the file that hold nothing: space a VACUUM would give back. */
+    freePages: number;
+  };
+  /** Row counts, table by table. */
+  tables: { name: string; rows: number }[];
+  programs: {
+    total: number;
+    published: number;
+    promoted: number;
+    authorWanted: number;
+    missing: number;
+    withFile: number;
+    withLaunch: number;
+    withScreenshot: number;
+    withoutCategory: number;
+    withoutModels: number;
+    withoutDescription: number;
+    withoutYear: number;
+    withoutAuthor: number;
+    yearFrom: number | null;
+    yearTo: number | null;
+    downloads: number;
+    runs: number;
+    firstCreated: string;
+    lastCreated: string;
+    lastUpdated: string;
+  };
+  categories: { top: number; sub: number };
+  byFamily: { name: string; slug: string; models: number; programs: number; published: number; downloads: number; runs: number; bytes: number }[];
+  /** Top level; programs of the subcategories are counted in. The last row, id 0, is "no category". */
+  byCategory: { id: number; name: string; subcategories: number; programs: number }[];
+  /** integration '' = made by hand. */
+  byIntegration: { integration: string; programs: number; published: number; missing: number; lastUpdated: string }[];
+  /** decade 0 = year unknown. */
+  byDecade: { decade: number; programs: number }[];
+  byEmulator: { name: string; slots: number; files: number; links: number; bytes: number; runs: number }[];
+  popular: { title: string; slug: string; family_slug: string; downloads: number; runs: number }[];
+  recent: { title: string; slug: string; family_slug: string; created_at: string; integration: string }[];
+  /** File names the database refers to, for comparing with what is on disk. */
+  referenced: { files: string[]; screenshots: string[] };
+  screenshots: { total: number; imported: number; programsWithSeveral: number; most: number };
+};
+
+export function report(): Report {
+  const all = <T>(sql: string): T[] => db.prepare(sql).all() as unknown as T[];
+  const one = <T>(sql: string): T => db.prepare(sql).get() as unknown as T;
+  const num = (sql: string): number => Number(Object.values(one<Record<string, number | null>>(sql))[0] ?? 0);
+  const pragma = (name: string): string | number => Object.values(one<Record<string, string | number>>(`PRAGMA ${name}`))[0];
+
+  const tableNames = [
+    'families', 'models', 'emulators', 'categories', 'programs',
+    'program_models', 'program_emulator_files', 'program_screenshots', 'users',
+  ];
+
+  const p = one<Record<string, number | string | null>>(
+    `SELECT COUNT(*) AS total,
+            COALESCE(SUM(published), 0) AS published,
+            COALESCE(SUM(promoted), 0) AS promoted,
+            COALESCE(SUM(author_wanted), 0) AS authorWanted,
+            COALESCE(SUM(missing_since <> ''), 0) AS missing,
+            COALESCE(SUM(file_name <> ''), 0) AS withFile,
+            COALESCE(SUM(screenshot <> ''), 0) AS withScreenshot,
+            COALESCE(SUM(category_id IS NULL), 0) AS withoutCategory,
+            COALESCE(SUM(description = ''), 0) AS withoutDescription,
+            COALESCE(SUM(year IS NULL), 0) AS withoutYear,
+            COALESCE(SUM(author = ''), 0) AS withoutAuthor,
+            MIN(year) AS yearFrom, MAX(year) AS yearTo,
+            COALESCE(SUM(downloads), 0) AS downloads,
+            COALESCE(SUM(runs), 0) AS runs,
+            COALESCE(MIN(created_at), '') AS firstCreated,
+            COALESCE(MAX(created_at), '') AS lastCreated,
+            COALESCE(MAX(updated_at), '') AS lastUpdated
+       FROM programs`,
+  );
+  const n = (key: string): number => Number(p[key] ?? 0);
+
+  return {
+    engine: {
+      sqliteVersion: String(one<{ v: string }>('SELECT sqlite_version() AS v').v),
+      schemaVersion: Number(pragma('user_version')),
+      journalMode: String(pragma('journal_mode')),
+      pageSize: Number(pragma('page_size')),
+      pageCount: Number(pragma('page_count')),
+      freePages: Number(pragma('freelist_count')),
+    },
+    tables: tableNames.map((name) => ({ name, rows: num(`SELECT COUNT(*) FROM ${name}`) })),
+    programs: {
+      total: n('total'),
+      published: n('published'),
+      promoted: n('promoted'),
+      authorWanted: n('authorWanted'),
+      missing: n('missing'),
+      withFile: n('withFile'),
+      withLaunch: num(
+        `SELECT COUNT(DISTINCT program_id) FROM program_emulator_files WHERE file_name <> '' OR file_url <> ''`,
+      ),
+      withScreenshot: n('withScreenshot'),
+      withoutCategory: n('withoutCategory'),
+      withoutModels: num('SELECT COUNT(*) FROM programs WHERE id NOT IN (SELECT program_id FROM program_models)'),
+      withoutDescription: n('withoutDescription'),
+      withoutYear: n('withoutYear'),
+      withoutAuthor: n('withoutAuthor'),
+      yearFrom: p.yearFrom === null ? null : Number(p.yearFrom),
+      yearTo: p.yearTo === null ? null : Number(p.yearTo),
+      downloads: n('downloads'),
+      runs: n('runs'),
+      firstCreated: String(p.firstCreated),
+      lastCreated: String(p.lastCreated),
+      lastUpdated: String(p.lastUpdated),
+    },
+    categories: {
+      top: num('SELECT COUNT(*) FROM categories WHERE parent_id IS NULL'),
+      sub: num('SELECT COUNT(*) FROM categories WHERE parent_id IS NOT NULL'),
+    },
+    byFamily: all(
+      `SELECT f.name, f.slug,
+              (SELECT COUNT(*) FROM models m WHERE m.family_id = f.id) AS models,
+              COUNT(p.id) AS programs,
+              COALESCE(SUM(p.published), 0) AS published,
+              COALESCE(SUM(p.downloads), 0) AS downloads,
+              COALESCE(SUM(p.runs), 0) AS runs,
+              COALESCE(SUM(p.file_size), 0) AS bytes
+         FROM families f LEFT JOIN programs p ON p.family_id = f.id
+        GROUP BY f.id ORDER BY f.sort_order, f.id`,
+    ),
+    byCategory: all(
+      // The ORDER BY of a compound SELECT takes column names only, hence the wrapping query.
+      `SELECT * FROM (
+       SELECT t.id, t.name,
+              (SELECT COUNT(*) FROM categories s WHERE s.parent_id = t.id) AS subcategories,
+              (SELECT COUNT(*) FROM programs p
+                WHERE p.category_id = t.id
+                   OR p.category_id IN (SELECT id FROM categories WHERE parent_id = t.id)) AS programs
+         FROM categories t WHERE t.parent_id IS NULL
+        UNION ALL
+       SELECT 0, '', 0, (SELECT COUNT(*) FROM programs WHERE category_id IS NULL)
+       ) ORDER BY id = 0, programs DESC`,
+    ),
+    byIntegration: all(
+      `SELECT integration, COUNT(*) AS programs,
+              COALESCE(SUM(published), 0) AS published,
+              COALESCE(SUM(missing_since <> ''), 0) AS missing,
+              MAX(updated_at) AS lastUpdated
+         FROM programs GROUP BY integration ORDER BY integration = '', programs DESC`,
+    ),
+    byDecade: all(
+      `SELECT COALESCE(year / 10 * 10, 0) AS decade, COUNT(*) AS programs
+         FROM programs GROUP BY 1 ORDER BY 1 = 0, 1`,
+    ),
+    byEmulator: all(
+      `SELECT e.name,
+              COUNT(pef.program_id) AS slots,
+              COALESCE(SUM(pef.file_name <> ''), 0) AS files,
+              COALESCE(SUM(pef.file_name = '' AND pef.file_url <> ''), 0) AS links,
+              COALESCE(SUM(pef.file_size), 0) AS bytes,
+              COALESCE(SUM(pef.runs), 0) AS runs
+         FROM emulators e LEFT JOIN program_emulator_files pef ON pef.emulator_id = e.id
+        GROUP BY e.id ORDER BY e.sort_order, e.id`,
+    ),
+    popular: all(
+      `SELECT p.title, p.slug, f.slug AS family_slug, p.downloads, p.runs
+         FROM programs p JOIN families f ON f.id = p.family_id
+        WHERE p.downloads + p.runs > 0
+        ORDER BY p.downloads + p.runs DESC, p.title LIMIT 10`,
+    ),
+    recent: all(
+      `SELECT p.title, p.slug, f.slug AS family_slug, p.created_at, p.integration
+         FROM programs p JOIN families f ON f.id = p.family_id
+        ORDER BY p.created_at DESC, p.id DESC LIMIT 10`,
+    ),
+    referenced: {
+      files: all<{ name: string }>(
+        `SELECT file_name AS name FROM programs WHERE file_name <> ''
+          UNION SELECT file_name FROM program_emulator_files WHERE file_name <> ''`,
+      ).map((row) => String(row.name)),
+      screenshots: all<{ name: string }>(
+        `SELECT file_name AS name FROM program_screenshots
+          UNION SELECT image FROM families WHERE image <> ''
+          UNION SELECT image FROM models WHERE image <> ''`,
+      ).map((row) => String(row.name)),
+    },
+    screenshots: {
+      total: num('SELECT COUNT(*) FROM program_screenshots'),
+      imported: num(`SELECT COUNT(*) FROM program_screenshots WHERE source_url <> ''`),
+      programsWithSeveral: num(
+        'SELECT COUNT(*) FROM (SELECT 1 FROM program_screenshots GROUP BY program_id HAVING COUNT(*) > 1)',
+      ),
+      most: num(
+        'SELECT COALESCE(MAX(c), 0) FROM (SELECT COUNT(*) AS c FROM program_screenshots GROUP BY program_id)',
+      ),
+    },
+  };
+}
+
 // ------------------------------------------------------------------------ users
 
 export function getUserByName(username: string): User | null {

@@ -84,6 +84,7 @@ data/           catalog.db, screenshots/, files/, session-secret  (не в git)
 | GET | `/run/:slug/:эмулятор` | редирект в эмулятор, +1 к счётчикам |
 | GET | `/files/:name`, `/screenshots/:name` | статика с CORS и Range |
 | GET/POST | `/admin/*` | админка, справочники, администраторы |
+| GET | `/admin/stats` | статистика: записи по таблицам, программы в разрезах, объём файлов и базы, расхождения диска с базой |
 | PUT | `/admin/upload/:сущность/:id/:вид` | тело запроса — сам файл |
 
 Форма отправляется как `application/x-www-form-urlencoded`, файлы уходят отдельными PUT-запросами —

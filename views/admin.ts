@@ -14,6 +14,7 @@ export function nav(user: User): string {
   <a href="/admin/ref/models">модели</a>
   <a href="/admin/ref/emulators">эмуляторы</a>
   <a href="/admin/ref/categories">категории</a>
+  <a href="/admin/stats">статистика</a>
   <a href="/admin/users">админы</a>
   <a href="/admin/password">${escapeHtml(adminName(user))}</a>
   <form class="inline" method="post" action="/admin/logout"><button class="linkish" type="submit">выйти</button></form>`;
