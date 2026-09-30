@@ -198,9 +198,8 @@ const emulators: RefSpec = {
     if (!str(form, 'name')) return 'Название обязательно.';
     const template = str(form, 'url_template', 500);
     if (!template) return 'URL запуска обязателен.';
-    if (!template.includes('{url}') && !template.includes('{rawurl}')) {
-      return 'В шаблоне нет {url} или {rawurl} — эмулятору некуда подставить ссылку на файл.';
-    }
+    // No placeholder is demanded: {url}, {rawurl} and {meta:key} are all optional, and
+    // a template without any of them is simply the same launch page for every program.
     try {
       const url = new URL(template);
       if (url.protocol !== 'http:' && url.protocol !== 'https:') return 'Шаблон должен быть http(s)-адресом.';
