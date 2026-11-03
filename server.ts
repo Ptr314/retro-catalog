@@ -211,7 +211,11 @@ route('GET', '/admin/new', (ctx) => {
   const modelId = Number(ctx.url.searchParams.get('model_id')) || 0;
   const family = familyId ? db.getRef('families', familyId) : null;
   // A model of another family would be dropped on save anyway; do not show it ticked.
-  const modelIds = family && db.listModels(familyId).some((m) => m.id === modelId) ? [modelId] : [];
+  const familyModels = family ? db.listModels(familyId) : [];
+  // A family with a single model ticks it by default (admin.js does the same when the family changes).
+  const modelIds = familyModels.some((m) => m.id === modelId)
+    ? [modelId]
+    : familyModels.length === 1 ? [familyModels[0].id] : [];
   html(ctx.res, 200, editPage(ctx.user!, null, { ...editData(null), familyId: family ? familyId : 0, selectedModels: modelIds }));
 }, true);
 
@@ -280,6 +284,7 @@ route('POST', '/admin/save', async (ctx) => {
     author: (form.get('author') ?? '').trim().slice(0, 120),
     author_wanted: form.get('author_wanted') ? 1 : 0,
     promoted: form.get('promoted') ? 1 : 0,
+    bundled: form.get('bundled') ? 1 : 0,
     source_url: sourceUrl,
     description: (form.get('description') ?? '').trim().slice(0, 20000),
     graphics: (form.get('graphics') ?? '').trim().slice(0, 200),
@@ -744,6 +749,7 @@ function readQuery(ctx: Ctx): ListQuery {
     subcategoryId: subcategory && Number(subcategory.parent_id) === categoryId ? subcategoryId : null,
     year: Number(p.get('year')) || null,
     sort: p.get('sort') ?? 'new',
+    bundle: p.get('bundle') === '1',
   };
 }
 
@@ -760,7 +766,7 @@ function viewMode(ctx: Ctx): ViewMode {
 function renderCatalog(ctx: Ctx, query: ListQuery, catalogCtx: CatalogContext): void {
   const page = Number(ctx.url.searchParams.get('page')) || 1;
   const view = viewMode(ctx);
-  const result = db.listPrograms({ ...query, page, perPage: 24 });
+  const result = db.listPrograms({ ...query, bundledOnly: query.bundle, page, perPage: 24 });
   html(
     ctx.res,
     200,

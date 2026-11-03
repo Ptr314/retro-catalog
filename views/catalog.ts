@@ -17,6 +17,8 @@ export type ListQuery = {
   subcategoryId: number | null;
   year: number | null;
   sort: string;
+  /** ?bundle=1 — only programs flagged for an emulator's bundle. No visible control: it comes from emulator docs. */
+  bundle: boolean;
 };
 
 export type ViewMode = 'tiles' | 'table';
@@ -63,6 +65,7 @@ export function queryString(
     subcategory: q.subcategoryId,
     year: q.year,
     sort: q.sort === 'new' ? null : q.sort,
+    bundle: q.bundle ? 1 : null,
     ...overrides,
   };
   for (const [key, value] of Object.entries(merged)) {
@@ -159,6 +162,7 @@ export function catalogBody(v: CatalogView): string {
       .join('')}
   </select>
   ${view === 'table' ? '<input type="hidden" name="view" value="table">' : ''}
+  ${q.bundle ? '<input type="hidden" name="bundle" value="1">' : ''}
   <button type="submit">Показать</button>
   ${q.q || q.categoryId || q.year || (!ctx.family && q.familyId) || (!ctx.model && q.modelId)
     ? `<a class="reset" href="${escapeHtml(ctx.basePath)}">сбросить</a>`

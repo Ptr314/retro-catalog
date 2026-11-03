@@ -302,7 +302,15 @@
         group.hidden = group.getAttribute('data-family') !== familySelect.value;
       });
     };
-    familySelect.addEventListener('change', syncGroups);
+    // New program only: choosing a family that has a single model ticks that model.
+    var isNew = !(document.querySelector('input[name="id"]') || {}).value;
+    familySelect.addEventListener('change', function () {
+      syncGroups();
+      if (!isNew) return;
+      var group = modelGroups.querySelector('.model-group[data-family="' + familySelect.value + '"]');
+      var boxes = group ? group.querySelectorAll('input[name="models"]') : [];
+      if (boxes.length === 1) boxes[0].checked = true;
+    });
     syncGroups();
   }
 

@@ -152,6 +152,7 @@ for (const row of rows) {
     author: str(row.author),
     author_wanted: flag(row.author_wanted, 0),
     promoted: flag(row.promoted, existing ? existing.promoted : 0),
+    bundled: flag(row.bundled, existing ? existing.bundled : 0),
     source_url: /^https?:\/\//i.test(str(row.source_url)) ? str(row.source_url).slice(0, 500) : '',
     description: str(row.description),
     graphics: kept(row.graphics, existing?.graphics),

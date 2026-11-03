@@ -70,6 +70,8 @@ export type Program = {
   author_wanted: number;
   /** 1 = shown first under the "new" order. */
   promoted: number;
+  /** 1 = part of an emulator's bundle; selected by the public ?bundle=1 filter. */
+  bundled: number;
   /** http(s) link shown as «Автор/Источник», or empty. */
   source_url: string;
   /** Markdown source. */
@@ -358,6 +360,9 @@ const migrations: string[] = [
    CREATE INDEX program_screenshots_program ON program_screenshots(program_id, sort_order, id);
    INSERT INTO program_screenshots (program_id, file_name, sort_order, created_at)
      SELECT id, screenshot, 10, updated_at FROM programs WHERE screenshot <> '';`,
+
+  // Programs that ship with an emulator; the public list narrows to them with ?bundle=1.
+  `ALTER TABLE programs ADD COLUMN bundled INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 /** Runs fn inside BEGIN/COMMIT, rolling back on any throw. Must not be nested. */
@@ -532,6 +537,8 @@ export type ListOptions = {
   year?: number | null;
   /** Admin list: only rows the importer no longer finds in their source. */
   missingOnly?: boolean;
+  /** Only programs flagged "in the emulator's bundle". */
+  bundledOnly?: boolean;
   sort?: string;
   page?: number;
   perPage?: number;
@@ -575,6 +582,7 @@ function listWhere(opts: ListOptions): { clause: string; params: (string | numbe
     params.push(opts.subcategoryId);
   }
   if (opts.missingOnly) where.push("p.missing_since <> ''");
+  if (opts.bundledOnly) where.push('p.bundled = 1');
   if (opts.year) {
     where.push('p.year = ?');
     params.push(opts.year);
@@ -637,12 +645,12 @@ export function createProgram(p: ProgramInput, modelIds: number[]): number {
     const result = db
       .prepare(
         `INSERT INTO programs
-           (slug, title, family_id, category_id, year, author, author_wanted, promoted, source_url,
+           (slug, title, family_id, category_id, year, author, author_wanted, promoted, bundled, source_url,
             description, graphics, music, metadata, published, created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
-        p.slug, p.title, p.family_id, p.category_id, p.year, p.author, p.author_wanted, p.promoted, p.source_url,
+        p.slug, p.title, p.family_id, p.category_id, p.year, p.author, p.author_wanted, p.promoted, p.bundled, p.source_url,
         p.description, p.graphics, p.music, p.metadata, p.published, ts, ts,
       );
     const id = Number(result.lastInsertRowid);
@@ -657,12 +665,12 @@ export function updateProgram(id: number, p: ProgramInput, modelIds: number[]): 
     db.prepare(
       `UPDATE programs SET
          slug = ?, title = ?, family_id = ?, category_id = ?, year = ?, author = ?,
-         author_wanted = ?, promoted = ?, source_url = ?, description = ?, graphics = ?, music = ?,
+         author_wanted = ?, promoted = ?, bundled = ?, source_url = ?, description = ?, graphics = ?, music = ?,
          metadata = ?, published = ?, updated_at = ?
        WHERE id = ?`,
     ).run(
       p.slug, p.title, p.family_id, p.category_id, p.year, p.author,
-      p.author_wanted, p.promoted, p.source_url, p.description, p.graphics, p.music,
+      p.author_wanted, p.promoted, p.bundled, p.source_url, p.description, p.graphics, p.music,
       p.metadata, p.published, now(), id,
     );
     writeProgramModels(id, modelIds);

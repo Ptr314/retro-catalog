@@ -110,7 +110,7 @@ export function adminListPage(
       <td>${escapeHtml(categoryLabel(p))}</td>
       <td>${p.year ?? ''}</td>
       <td>${p.file_name ? `<span title="${escapeHtml(p.file_name)}">${escapeHtml(formatBytes(p.file_size) || 'есть')}</span>` : '<span class="muted">—</span>'}</td>
-      <td>${p.published ? '<span class="badge ok">виден</span>' : '<span class="badge">скрыт</span>'}${p.promoted ? ' <span class="badge">продвигается</span>' : ''}${missingBadge(p)}</td>
+      <td>${p.published ? '<span class="badge ok">виден</span>' : '<span class="badge">скрыт</span>'}${p.promoted ? ' <span class="badge">продвигается</span>' : ''}${p.bundled ? ' <span class="badge">в комплекте</span>' : ''}${missingBadge(p)}</td>
       <td class="row-actions"><a href="${escapeHtml(programUrl(p))}">открыть</a></td>
     </tr>`).join('')}
   </tbody>
@@ -348,6 +348,7 @@ export function editPage(user: User, p: ProgramRow | null, data: EditData, error
       ${integration}
       <label class="check"><input type="checkbox" name="published" value="1"${!p || p.published ? ' checked' : ''}> Показывать в каталоге</label>
       <label class="check"><input type="checkbox" name="promoted" value="1"${p?.promoted ? ' checked' : ''}> Продвигать — первой в «Сначала новые»</label>
+      <label class="check"><input type="checkbox" name="bundled" value="1"${p?.bundled ? ' checked' : ''}> В комплект эмулятора</label>
       ${modelGroups
         ? `<div data-model-groups>${modelGroups}</div>`
         : '<small class="hint">Моделей пока нет. <a href="/admin/ref/models/new">Добавить модель</a>.</small>'}
