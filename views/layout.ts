@@ -23,7 +23,7 @@ export type LayoutOptions = {
   /** Rendered in the header's right side. */
   nav?: string;
   bodyClass?: string;
-  /** Scripts from /static to pull in, e.g. ['admin.js']. */
+  /** Scripts from /static to pull in, e.g. ['admin.js']; pixels.js comes on every page anyway. */
   scripts?: string[];
 };
 
@@ -57,7 +57,7 @@ ${body}
   <span>${escapeHtml(config.siteName)}</span>
   <a href="/admin">админка</a>
 </footer>
-${(opts.scripts ?? []).map((name) => `<script src="${asset(name)}" defer></script>`).join('\n')}
+${['pixels.js', ...(opts.scripts ?? [])].map((name) => `<script src="${asset(name)}" defer></script>`).join('\n')}
 </body>
 </html>`;
 }

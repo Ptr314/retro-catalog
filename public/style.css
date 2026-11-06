@@ -221,9 +221,14 @@ button:active, .button:active { transform: translate(2px, 2px); }
 }
 .shot, .shot-big, .shot-small {
   display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: contain;
-  image-rendering: pixelated;          /* 8-bit screenshots scale as pixels, not blur */
   background: #000; border-radius: var(--tube);
 }
+/*
+ * 8-bit pictures scale as pixels, not blur — but only when enlarged. Shrunk with
+ * nearest-neighbour, a picture loses whole columns (stripes go black), so a picture drawn
+ * smaller than its pixels keeps the smooth filter. pixels.js decides which is which.
+ */
+img.upscaled { image-rendering: pixelated; }
 .shot-big { aspect-ratio: auto; min-height: 12rem; max-height: 62vh; }
 .shot-small { width: 8rem; height: 6rem; aspect-ratio: auto; object-fit: cover; }
 
@@ -453,7 +458,7 @@ a.chip:hover { border-color: var(--accent); color: var(--accent); text-decoratio
 .admin-table td { padding: .55rem .6rem; border-bottom: 1px dashed var(--line); vertical-align: middle; }
 .admin-table tbody tr:hover td { background: rgba(15, 26, 71, .7); }
 .admin-table .thumb { width: 76px; }
-.admin-table .thumb img { display: block; width: 64px; height: 48px; object-fit: cover; image-rendering: pixelated; border-radius: 8px / 6px; background: #000; }
+.admin-table .thumb img { display: block; width: 64px; height: 48px; object-fit: cover; border-radius: 8px / 6px; background: #000; }
 .thumb-empty { display: block; width: 64px; height: 48px; border-radius: 8px / 6px; background: var(--ink); border: 1px solid var(--line); }
 .row-actions { text-align: right; font-size: .88rem; }
 
@@ -517,7 +522,7 @@ a.chip:hover { border-color: var(--accent); color: var(--accent); text-decoratio
 .upload { display: flex; flex-direction: column; gap: .5rem; align-items: flex-start; }
 .upload-label { margin: 0; color: var(--muted); font-size: .9rem; }
 .upload small { color: var(--muted); font-size: .8rem; }
-.preview { width: 100%; max-height: 220px; object-fit: contain; image-rendering: pixelated; background: #000; border-radius: var(--tube); border: .4rem solid var(--ink); }
+.preview { width: 100%; max-height: 220px; object-fit: contain; background: #000; border-radius: var(--tube); border: .4rem solid var(--ink); }
 .preview-empty { height: 120px; background: var(--ink); border: 2px dashed var(--line); border-radius: var(--tube); }
 .current-file { margin: 0; word-break: break-all; }
 .shots-table .reorder-col { width: 5.5rem; }
