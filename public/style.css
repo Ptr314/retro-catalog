@@ -422,7 +422,10 @@ a.chip:hover { border-color: var(--accent); color: var(--accent); text-decoratio
 .md-more summary::-webkit-details-marker { display: none; }
 .md-more summary::before { content: "▸ "; color: var(--hot); }
 .md-more[open] summary::before { content: "▾ "; }
-.md-more[open] summary { color: var(--muted); margin-bottom: .6rem; }
+/* open, the full text replaces the excerpt instead of repeating it under it */
+.md-more-less, .md-more[open] .md-more-excerpt { display: none; }
+.md-more[open] .md-more-less { display: inline; }
+.md-more[open] summary { color: var(--muted); font-size: .85rem; margin-bottom: .4rem; }
 
 /* ------------------------------------------------------------------ panels */
 

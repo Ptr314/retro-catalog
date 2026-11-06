@@ -102,7 +102,10 @@ export function mdDetails(source: string, limit = 220): string {
   const full = renderMarkdown(source);
   // Nothing was cut off — there is nothing to expand to.
   if (!excerpt.endsWith('…')) return `<div class="md-body">${full}</div>`;
-  return `<details class="md-more"><summary>${escapeHtml(excerpt)}</summary><div class="md-body">${full}</div></details>`;
+  // Open, the full text starts with the same words, so the summary drops the excerpt
+  // and keeps only the way back (style.css swaps the two spans).
+  return `<details class="md-more"><summary><span class="md-more-excerpt">${escapeHtml(excerpt)}</span>`
+    + `<span class="md-more-less">свернуть</span></summary><div class="md-body">${full}</div></details>`;
 }
 
 /**
